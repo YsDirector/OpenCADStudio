@@ -1,5 +1,10 @@
 # TRIM: remove a hatch region
 
+This extends native HATCH trimming to multi-edge arrangements: the hatch fill
+is partitioned into bounded cells, and only the cell under the pick is removed.
+The implementation uses exact boundary sources where available, reconstructs
+analytic curves, and refuses edits whose retained topology cannot be verified.
+
 In Quick mode, run `TRIM` (`TR`) and click **inside the filled region to remove**.
 A click between pattern strokes works too. For example, a line joining the top
 and bottom of a hatched rectangle divides its fill into two regions: clicking
@@ -18,7 +23,10 @@ edit, including the original hatch and its metadata.
 - Cutting edges must partition the filled region. An unpartitioned fill,
   dangling line, pick outside the fill/in a hole, or ambiguous pick on a
   boundary is a no-op. No nearest-region fallback erases another region.
-- Coplanar lines, polylines and curves are supported. Rays/XLines are bounded
+- Coplanar lines, polylines and curves are supported. Simple heavy/3D polyline
+  cutters contribute only constituent segments in the hatch plane; mesh,
+  polyface, curve-fit and spline-fit modes are ignored rather than approximated
+  from their vertex order. Rays/XLines are bounded
   to the hatch extent; Standard mode's Edge: Extend extrapolates line limits.
 - Existing holes and disconnected fill components are retained. New paths
   recover analytic arcs/ellipses/splines from the original source geometry.
@@ -30,7 +38,7 @@ edit, including the original hatch and its metadata.
   operation. It does not edit hatch content inside a block reference or
   MPOLYGON, and Shift+click retains the existing curve-extension behavior.
 
-Implementation: `src/modules/draw/modify/trim_hatch.rs`. It builds a local
+Implementation: `src/modules/draw/modify/trim_hatch_region.rs`. It builds a local
 planar arrangement in the hatch OCS, classifies filled cells, removes the
 clicked cell and cancels shared surviving half-edges before reconstructing
 exact boundary paths. Pattern rendering strokes are never exploded.

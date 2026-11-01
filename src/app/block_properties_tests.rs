@@ -2,7 +2,7 @@ use super::{Message, OpenCADStudio};
 use crate::scene::model::object::{PropValue, Property};
 use codec::entities::{Insert, Line};
 use codec::types::Vector3;
-use codec::{CadDocument, EntityType};
+use codec::{Document, EntityType};
 use std::io::Cursor;
 
 fn fixture() -> OpenCADStudio {
@@ -314,7 +314,7 @@ fn block_properties_hyperlink_editor_targets_definition_without_selecting_it() {
     );
 }
 
-fn check_round_trip(doc: &CadDocument) {
+fn check_round_trip(doc: &Document) {
     let record = doc.block_records.get("PROPERTIES").unwrap();
     assert_eq!(record.units, 4);
     assert!(record.scale_uniformly);
@@ -514,4 +514,146 @@ fn block_properties_staged_values_do_not_follow_a_different_definition() {
             .description,
         ""
     );
+}
+
+fn select_editor_line(app: &mut OpenCADStudio) -> codec::types::Handle {
+    let i = app.active_tab;
+    let handle = app.tabs[i]
+        .scene
+        .document
+        .entities_in_block("PROPERTIES")
+        .find(|entity| matches!(entity, EntityType::Line(_)))
+        .unwrap()
+        .common()
+        .handle;
+    app.tabs[i].scene.selected.insert(handle);
+    app.refresh_properties();
+    handle
+}
+
+fn block_parameter_key() -> crate::scene::model::object::BlockParameterKey {
+    use crate::scene::model::object::{BlockParameterComponent, BlockParameterKey};
+    BlockParameterKey {
+        document: 0,
+        definition: codec::Handle::new(1),
+        insert: codec::Handle::new(2),
+        parameter: codec::Handle::new(3),
+        component: BlockParameterComponent::Distance,
+    }
+}
+
+fn open_dynamic_value_list(
+    app: &mut OpenCADStudio,
+) -> crate::scene::model::object::BlockParameterKey {
+    let key = block_parameter_key();
+    let _ = app.update(Message::PropBlockPickerToggle { key, quick: false });
+    assert_eq!(
+        app.tabs[app.active_tab].properties.open_block_picker,
+        Some((key, false))
+    );
+    key
+}
+
+#[test]
+fn dynamic_value_list_toggles_open_and_closed() {
+    let mut app = fixture();
+    let key = open_dynamic_value_list(&mut app);
+    let _ = app.update(Message::PropBlockPickerToggle { key, quick: false });
+    assert_eq!(app.tabs[app.active_tab].properties.open_block_picker, None);
+}
+
+/// The same row exists on the docked and Quick Properties surfaces, and a
+/// caret click names the surface it came from: clicking one copy's caret opens
+/// that copy's list instead of closing the other copy's.
+#[test]
+fn each_surface_toggles_its_own_copy_of_the_list() {
+    let mut app = fixture();
+    let key = open_dynamic_value_list(&mut app);
+    let _ = app.update(Message::PropBlockPickerToggle { key, quick: true });
+    assert_eq!(
+        app.tabs[app.active_tab].properties.open_block_picker,
+        Some((key, true))
+    );
+    let _ = app.update(Message::PropBlockPickerToggle { key, quick: false });
+    assert_eq!(
+        app.tabs[app.active_tab].properties.open_block_picker,
+        Some((key, false))
+    );
+    let _ = app.update(Message::PropBlockPickerToggle { key, quick: false });
+    assert_eq!(app.tabs[app.active_tab].properties.open_block_picker, None);
+}
+
+/// Keys the list must keep to itself. Escape closes it; Enter and the arrows
+/// would otherwise leave the list open behind a viewport that has already
+/// reacted (a cleared selection, a recalled command, a nudged selection).
+#[test]
+fn open_dynamic_value_list_swallows_escape_enter_and_the_arrows() {
+    use super::ArrowKey;
+
+    let mut app = fixture();
+    open_dynamic_value_list(&mut app);
+    for msg in [
+        Message::ArrowKeyPressed {
+            direction: ArrowKey::Up,
+            shortcut: "UP".into(),
+            extend_selection: false,
+        },
+        Message::CommandLineArrowProbe {
+            direction: ArrowKey::Down,
+            extend_selection: false,
+        },
+        Message::CommandFinalize,
+        Message::CommandSubmit,
+        Message::CommandSpace,
+        Message::ShortcutPressed("ENTER".into()),
+        Message::ShortcutPressed("SPACE".into()),
+    ] {
+        assert!(
+            app.intercept_block_picker_key(&msg).is_some(),
+            "{msg:?} must not reach the command line or the viewport"
+        );
+    }
+    assert!(app.tabs[app.active_tab].properties.open_block_picker.is_some());
+    assert!(app
+        .intercept_block_picker_key(&Message::PropBlockPickerToggle {
+            key: block_parameter_key(),
+            quick: false,
+        })
+        .is_none());
+}
+
+#[test]
+fn escape_closes_the_dynamic_value_list_and_keeps_the_selection() {
+    for escape in [Message::CommandEscape, Message::ShortcutPressed("ESCAPE".into())] {
+        let mut app = fixture();
+        let handle = select_editor_line(&mut app);
+        open_dynamic_value_list(&mut app);
+        let _ = app.update(escape);
+        let panel = &app.tabs[app.active_tab].properties;
+        assert_eq!(panel.open_block_picker, None);
+        assert!(app.tabs[app.active_tab].scene.selected.contains(&handle));
+    }
+}
+
+#[test]
+fn enter_does_not_reach_the_command_line_while_the_list_is_open() {
+    let mut app = fixture();
+    open_dynamic_value_list(&mut app);
+    app.command_line.history_open = true;
+    app.command_line.input = "LINE".into();
+    let _ = app.update(Message::CommandSubmit);
+    // Submitting would close the history and run the typed command.
+    assert!(app.command_line.history_open);
+    assert_eq!(app.command_line.input, "LINE");
+}
+
+/// A flag naming a row that is not on the panel is dropped by the rebuild
+/// instead of leaving the guard swallowing keys.
+#[test]
+fn a_rebuild_without_a_dynamic_row_drops_the_list() {
+    let mut app = fixture();
+    let i = app.active_tab;
+    open_dynamic_value_list(&mut app);
+    app.refresh_properties();
+    assert_eq!(app.tabs[i].properties.open_block_picker, None);
 }

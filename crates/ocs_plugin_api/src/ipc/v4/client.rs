@@ -10,14 +10,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use codec::xdata::ExtendedDataRecord;
-use codec::{CadDocument, EntityType, Handle};
+use codec::{Document, EntityType, Handle};
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use interprocess::TryClone;
 
 use crate::host::{
-    DocumentReader, ExecutionResult, HostApi, HostNotification, InteractiveCommand,
-    PluginNotification, PluginRequestSender, PluginRequestError, ReaderEntity, HostSettingValue,
+    DocumentReader, ExecutionResult, HostApi, HostNotification, HostSettingValue,
+    InteractiveCommand, PluginNotification, PluginRequestError, PluginRequestSender, ReaderEntity,
 };
 use crate::ipc::protocol::{
     HostRequest, HostResponse, PluginRequest, PluginResponse, RunnerHandshake,
@@ -26,7 +26,7 @@ use crate::ipc::transport::{recv, send, TransportError};
 use crate::ipc::v4::protocol::{
     HostToPluginV4, NotificationEnvelope, PluginToHostV4, V4_PROTOCOL_VERSION,
 };
-use crate::shm::{DocumentViewInfo, SharedDocumentReader, DocumentViewData};
+use crate::shm::{DocumentViewData, DocumentViewInfo, SharedDocumentReader};
 
 /// Default capacity of the bounded host→plugin notification queue.
 const DEFAULT_NOTIFY_QUEUE_SIZE: usize = 1024;
@@ -89,8 +89,7 @@ impl V4Client {
             )))
         })?;
 
-        let (notify_tx, notify_rx) =
-            mpsc::sync_channel(notify_queue_size());
+        let (notify_tx, notify_rx) = mpsc::sync_channel(notify_queue_size());
         let (runner_tx, runner_rx) = mpsc::channel();
 
         let shared = Arc::new(Shared {
@@ -101,14 +100,7 @@ impl V4Client {
 
         let shared_for_reader = Arc::clone(&shared);
         let notifications = Arc::new(Mutex::new(notify_rx));
-        std::thread::spawn(move || {
-            reader_thread(
-                reader,
-                shared_for_reader,
-                notify_tx,
-                runner_tx,
-            )
-        });
+        std::thread::spawn(move || reader_thread(reader, shared_for_reader, notify_tx, runner_tx));
 
         Ok(Self {
             shared,
@@ -133,7 +125,11 @@ impl V4Client {
 
     /// Non-blocking poll for host-to-plugin notifications.
     pub fn try_recv_notification(&self) -> Option<(Option<u64>, HostNotification)> {
-        self.notifications.lock().unwrap_or_else(|e| e.into_inner()).try_recv().ok()
+        self.notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_recv()
+            .ok()
     }
 
     /// Send a plugin response for a host request.
@@ -143,18 +139,11 @@ impl V4Client {
         resp: HostResponse,
     ) -> Result<(), crate::ipc::transport::TransportError> {
         let mut writer = self.shared.writer.lock().unwrap_or_else(|e| e.into_inner());
-        send(
-            &mut writer,
-            &PluginToHostV4::Response { id, payload: resp },
-        )
+        send(&mut writer, &PluginToHostV4::Response { id, payload: resp })
     }
 
     /// Send a plugin-to-host notification.
-    pub fn notify_plugin(
-        &self,
-        command_id: Option<u64>,
-        notification: PluginNotification,
-    ) {
+    pub fn notify_plugin(&self, command_id: Option<u64>, notification: PluginNotification) {
         let envelope = NotificationEnvelope {
             command_id,
             payload: notification,
@@ -168,10 +157,7 @@ impl V4Client {
     /// Build a callback that sends a delayed `CodeExecutionResult` response for
     /// the given request id. Used by `start_execute_code` implementations that
     /// run REPL code on a background thread.
-    pub fn execute_code_responder(
-        &self,
-        id: u64,
-    ) -> Box<dyn FnOnce(ExecutionResult) + Send> {
+    pub fn execute_code_responder(&self, id: u64) -> Box<dyn FnOnce(ExecutionResult) + Send> {
         let shared = Arc::clone(&self.shared);
         Box::new(move |result| {
             let mut writer = shared.writer.lock().unwrap_or_else(|e| e.into_inner());
@@ -197,6 +183,15 @@ impl V4Client {
             tab_index,
             interactive,
         )
+    }
+
+    fn request_for_tab(
+        &self,
+        tab_id: Option<u64>,
+        req: PluginRequest,
+    ) -> Result<PluginResponse, PluginRequestError> {
+        send_plugin_request(&self.shared, tab_id, req)
+            .map_err(|e| PluginRequestError(e.to_string()))
     }
 }
 
@@ -235,7 +230,10 @@ fn reader_thread(
                     }
                 }
                 Ok(HostToPluginV4::Notification(envelope)) => {
-                    if notify_tx.try_send((envelope.command_id, envelope.payload)).is_err() {
+                    if notify_tx
+                        .try_send((envelope.command_id, envelope.payload))
+                        .is_err()
+                    {
                         let now = Instant::now();
                         let should_log = last_drop_log
                             .map(|t| now.duration_since(t) >= DROP_LOG_INTERVAL)
@@ -247,7 +245,10 @@ fn reader_thread(
                     }
                 }
                 Ok(HostToPluginV4::Request { id, payload }) => {
-                    if runner_tx.send(RunnerFrame::Request { id, payload }).is_err() {
+                    if runner_tx
+                        .send(RunnerFrame::Request { id, payload })
+                        .is_err()
+                    {
                         // Runner loop has exited; stop reading.
                         break;
                     }
@@ -276,7 +277,7 @@ pub struct V4PluginHostApi {
     shared: Arc<Shared>,
     notifications: Arc<Mutex<NotificationQueue>>,
     tab_index: usize,
-    document_cache: OnceCell<CadDocument>,
+    document_cache: OnceCell<Document>,
     interactive: Rc<RefCell<HashMap<u64, Box<dyn InteractiveCommand>>>>,
     next_command_id: Cell<u64>,
     record_cache: RefCell<HashMap<(Handle, String), &'static ExtendedDataRecord>>,
@@ -313,16 +314,16 @@ impl V4PluginHostApi {
         send_plugin_request(&self.shared, self.tab_id_cache.get(), req)
     }
 
-    fn fetch_document(&self) -> CadDocument {
+    fn fetch_document(&self) -> Document {
         match self.request(PluginRequest::DocumentSnapshot) {
             Ok(PluginResponse::Document(doc)) => *doc,
             Ok(other) => {
                 eprintln!("[plugin] unexpected DocumentSnapshot response: {other:?}");
-                CadDocument::default()
+                Document::default()
             }
             Err(e) => {
                 eprintln!("[plugin] failed to fetch document snapshot: {e}");
-                CadDocument::default()
+                Document::default()
             }
         }
     }
@@ -385,15 +386,6 @@ impl PluginRequestSender for V4PluginRequestSender {
         send_plugin_request(&self.shared, Some(self.tab_id), req)
             .map_err(|e| PluginRequestError(e.to_string()))
     }
-
-    fn request_for_tab(
-        &self,
-        tab_id: Option<u64>,
-        req: PluginRequest,
-    ) -> Result<PluginResponse, PluginRequestError> {
-        send_plugin_request(&self.shared, tab_id, req)
-            .map_err(|e| PluginRequestError(e.to_string()))
-    }
 }
 
 impl HostApi for V4PluginHostApi {
@@ -401,11 +393,11 @@ impl HostApi for V4PluginHostApi {
         self.tab_index
     }
 
-    fn document(&self) -> &CadDocument {
+    fn document(&self) -> &Document {
         self.document_cache.get_or_init(|| self.fetch_document())
     }
 
-    fn document_mut(&mut self) -> &mut CadDocument {
+    fn document_mut(&mut self) -> &mut Document {
         if self.document_cache.get().is_none() {
             let doc = self.fetch_document();
             let _ = self.document_cache.set(doc);
@@ -519,9 +511,7 @@ impl HostApi for V4PluginHostApi {
 
     fn write_record(&mut self, handle: Handle, record: ExtendedDataRecord) -> bool {
         let app = record.application_name.clone();
-        match self
-            .request(PluginRequest::WriteRecord { handle, record })
-        {
+        match self.request(PluginRequest::WriteRecord { handle, record }) {
             Ok(PluginResponse::Bool(b)) => {
                 if b {
                     self.record_cache.borrow_mut().remove(&(handle, app));
@@ -571,17 +561,27 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    fn begin_undo(&mut self, label: &str) {
-        if let Err(e) = self.request(PluginRequest::BeginUndo {
+    fn begin_undo_group(&mut self, label: &str) {
+        if let Err(e) = self.request(PluginRequest::BeginUndoGroup {
             label: label.to_string(),
         }) {
-            eprintln!("[plugin] begin_undo failed: {e}");
+            eprintln!("[plugin] begin_undo_group failed: {e}");
         }
     }
 
-    fn commit_undo(&mut self) {
-        if let Err(e) = self.request(PluginRequest::CommitUndo) {
-            eprintln!("[plugin] commit_undo failed: {e}");
+    fn end_undo_group(&mut self) {
+        if let Err(e) = self.request(PluginRequest::EndUndoGroup) {
+            eprintln!("[plugin] end_undo_group failed: {e}");
+        }
+    }
+
+    fn query_entities(&mut self, query: &str) -> Result<crate::host::EntityPage, String> {
+        match self.request(PluginRequest::QueryEntities {
+            query: query.to_string(),
+        }) {
+            Ok(PluginResponse::EntityPage(page)) => page,
+            Ok(other) => Err(format!("unexpected QueryEntities response: {other:?}")),
+            Err(e) => Err(format!("QueryEntities failed: {e}")),
         }
     }
 
@@ -654,16 +654,18 @@ impl HostApi for V4PluginHostApi {
             }
         }
         match self.doc_view.borrow().as_ref() {
-            Some(info) => match SharedDocumentReader::<DocumentViewData>::open(Path::new(&info.path)) {
-                Ok(reader) => Box::new(reader),
-                Err(e) => {
-                    eprintln!(
-                        "[plugin] failed to open document view at {}: {e}",
-                        info.path
-                    );
-                    Box::new(EmptyDocumentReader)
+            Some(info) => {
+                match SharedDocumentReader::<DocumentViewData>::open(Path::new(&info.path)) {
+                    Ok(reader) => Box::new(reader),
+                    Err(e) => {
+                        eprintln!(
+                            "[plugin] failed to open document view at {}: {e}",
+                            info.path
+                        );
+                        Box::new(EmptyDocumentReader)
+                    }
                 }
-            },
+            }
             None => Box::new(EmptyDocumentReader),
         }
     }
@@ -680,7 +682,11 @@ impl HostApi for V4PluginHostApi {
     }
 
     fn try_recv_notification(&mut self) -> Option<(Option<u64>, HostNotification)> {
-        self.notifications.lock().unwrap_or_else(|e| e.into_inner()).try_recv().ok()
+        self.notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .try_recv()
+            .ok()
     }
 
     fn plugin_request_sender(&self) -> Option<Box<dyn PluginRequestSender>> {
@@ -713,7 +719,11 @@ impl HostApi for V4PluginHostApi {
     fn document_view_v4(&mut self, tab_id: u64) -> Option<DocumentViewInfo> {
         {
             let mut view = self.doc_view_v4.borrow_mut();
-            if view.as_ref().map(|(cached_id, _)| *cached_id) != Some(tab_id) {
+            // A drawing that outgrew its mapping moved to a new file.
+            let current = view.as_ref().is_some_and(|(cached_id, info)| {
+                *cached_id == tab_id && Path::new(&info.path).exists()
+            });
+            if !current {
                 match self.request(PluginRequest::OpenDocumentViewV4 { tab_id }) {
                     Ok(PluginResponse::DocumentViewV4 { path, version }) => {
                         *view = Some((tab_id, DocumentViewInfo { path, version }));
@@ -741,120 +751,6 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    // ── API v5 (OCSMechanical) ──────────────────────────────────────────────
-    fn selected_handles(&self) -> Vec<Handle> {
-        match self.request(PluginRequest::SelectedHandles) {
-            Ok(PluginResponse::Handles(handles)) => handles,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected SelectedHandles response: {other:?}");
-                Vec::new()
-            }
-            Err(e) => {
-                eprintln!("[plugin] SelectedHandles failed: {e}");
-                Vec::new()
-            }
-        }
-    }
-
-    fn set_current_layer(&mut self, name: &str) -> bool {
-        match self.request(PluginRequest::SetCurrentLayer(name.to_string())) {
-            Ok(PluginResponse::Bool(b)) => b,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected SetCurrentLayer response: {other:?}");
-                false
-            }
-            Err(e) => {
-                eprintln!("[plugin] SetCurrentLayer failed: {e}");
-                false
-            }
-        }
-    }
-
-    fn ensure_layers(&mut self, defs: Vec<crate::host::LayerDef>) -> usize {
-        match self.request(PluginRequest::EnsureLayers(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureLayers response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureLayers failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn ensure_linetypes(&mut self, defs: Vec<crate::host::LinetypeDef>) -> usize {
-        match self.request(PluginRequest::EnsureLinetypes(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureLinetypes response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureLinetypes failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn ensure_text_styles(&mut self, defs: Vec<crate::host::TextStyleDef>) -> usize {
-        match self.request(PluginRequest::EnsureTextStyles(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureTextStyles response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureTextStyles failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
-        match self.request(PluginRequest::ShowFramePicker(frames)) {
-            Ok(PluginResponse::Bool(b)) => b,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected ShowFramePicker response: {other:?}");
-                false
-            }
-            Err(e) => {
-                eprintln!("[plugin] ShowFramePicker failed: {e}");
-                false
-            }
-        }
-    }
-
-    fn take_pending_frame_selection(&mut self) -> Option<crate::host::FrameSelection> {
-        match self.request(PluginRequest::TakePendingFrameSelection) {
-            Ok(PluginResponse::FrameSelection(sel)) => sel,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected TakePendingFrameSelection response: {other:?}");
-                None
-            }
-            Err(e) => {
-                eprintln!("[plugin] TakePendingFrameSelection failed: {e}");
-                None
-            }
-        }
-    }
-
     fn document_path(&self, tab_id: u64) -> Option<std::path::PathBuf> {
         match self.request(PluginRequest::DocumentPath { tab_id }) {
             Ok(PluginResponse::DocumentPath(Some(path))) => Some(std::path::PathBuf::from(path)),
@@ -871,7 +767,9 @@ impl HostApi for V4PluginHostApi {
     }
 
     fn system_variable(&self, name: &str) -> Option<HostSettingValue> {
-        match self.request(PluginRequest::GetSystemVariable { name: name.to_owned() }) {
+        match self.request(PluginRequest::GetSystemVariable {
+            name: name.to_owned(),
+        }) {
             Ok(PluginResponse::SystemVariable(value)) => value,
             _ => None,
         }
@@ -904,10 +802,13 @@ impl HostApi for V4PluginHostApi {
         entities: Vec<EntityType>,
     ) -> Result<(), String> {
         match self.request(PluginRequest::UpdateEntitiesTransaction {
-            label: label.to_owned(), entities,
+            label: label.to_owned(),
+            entities,
         }) {
             Ok(PluginResponse::EntityTransactionResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -923,10 +824,15 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    fn solid_operation(&mut self, operation: crate::host::SolidOperation) -> Result<Handle, String> {
+    fn solid_operation(
+        &mut self,
+        operation: crate::host::SolidOperation,
+    ) -> Result<Handle, String> {
         match self.request(PluginRequest::SolidOperation { operation }) {
             Ok(PluginResponse::SolidResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -935,7 +841,10 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    fn run_command(&mut self, request: crate::host::CommandRequest) -> Result<crate::host::CommandOutcome, String> {
+    fn run_command(
+        &mut self,
+        request: crate::host::CommandRequest,
+    ) -> Result<crate::host::CommandOutcome, String> {
         match self.request(PluginRequest::RunCommand { request }) {
             Ok(PluginResponse::CommandResult(result)) => {
                 self.document_cache = OnceCell::new();
@@ -947,10 +856,15 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    fn table_operation(&mut self, operation: crate::host::TableOperation) -> Result<Handle, String> {
+    fn table_operation(
+        &mut self,
+        operation: crate::host::TableOperation,
+    ) -> Result<Handle, String> {
         match self.request(PluginRequest::TableOperation { operation }) {
             Ok(PluginResponse::TableResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -960,7 +874,9 @@ impl HostApi for V4PluginHostApi {
     }
 
     fn set_selection(&mut self, handles: &[Handle]) -> Result<(), String> {
-        match self.request(PluginRequest::SetSelection { handles: handles.to_vec() }) {
+        match self.request(PluginRequest::SetSelection {
+            handles: handles.to_vec(),
+        }) {
             Ok(PluginResponse::SelectionResult(result)) => result,
             Ok(PluginResponse::Error(error)) => Err(error),
             Ok(other) => Err(format!("unexpected selection response: {other:?}")),
@@ -1091,12 +1007,7 @@ impl HostApi for V4PluginHostApi {
             dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
             name: name.to_string(),
         }) {
-            Ok(PluginResponse::XRecordDeleteResult(result)) => {
-                if result.is_ok() {
-                    self.document_cache = OnceCell::new();
-                }
-                result
-            }
+            Ok(PluginResponse::XRecordDeleteResult(result)) => result,
             Ok(PluginResponse::Error(error)) => Err(error),
             Ok(other) => Err(format!("unexpected XRecord delete response: {other:?}")),
             Err(error) => Err(error.to_string()),
@@ -1114,9 +1025,6 @@ impl HostApi for V4PluginHostApi {
         }
     }
 
-    // ── fork: the fork's own additions follow the upstream ones ─────────────
-    // (same policy as `crate::host`: upstream's slots/positions stay untouched,
-    // fork-only methods are appended. See docs/fork-patches.md §A-1.)
     fn set_reference_only(&mut self, handle: Handle, reference_only: bool) -> Result<(), String> {
         match self.request(PluginRequest::SetReferenceOnly {
             handle,
@@ -1246,6 +1154,286 @@ impl HostApi for V4PluginHostApi {
             Err(error) => Err(error.to_string()),
         }
     }
+
+    fn stage_parametric_chain(
+        &mut self,
+        reference_name: &str,
+        chain: &crate::host::ParametricChain,
+        tolerance: f64,
+    ) -> Result<Vec<Handle>, String> {
+        // API v14: declared chain in, reference-only display handles out.
+        // A staged write mutates the document: the cached snapshot invalidates
+        // like every write path.
+        match self.request(PluginRequest::StageParametricChain {
+            reference_name: reference_name.to_string(),
+            chain: chain.clone(),
+            tolerance,
+        }) {
+            Ok(PluginResponse::StageParametricChainResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected parametric staging response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn sample_parametric(
+        &self,
+        chain: &crate::host::ParametricChain,
+        s: f64,
+    ) -> Result<Option<crate::host::ParametricSample>, String> {
+        // API v14: pure evaluation, no write, no cache effect.
+        match self.request(PluginRequest::SampleParametric {
+            chain: chain.clone(),
+            s,
+        }) {
+            Ok(PluginResponse::SampleParametricResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected parametric sample response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn register_plugin_class(
+        &mut self,
+        _plugin_id: &str,
+        class: &crate::host::PluginClassDeclaration,
+    ) -> Result<(), String> {
+        // API v14: declared class in; session registry state (no document
+        // mutation, no cache effect).
+        match self.request(PluginRequest::RegisterPluginClass {
+            class: class.clone(),
+        }) {
+            Ok(PluginResponse::RegisterPluginClassResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected class registration response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn stage_plugin_class_instance(
+        &mut self,
+        _plugin_id: &str,
+        instance: &crate::host::PluginClassInstance,
+    ) -> Result<Vec<Handle>, String> {
+        // API v14: identity + design descriptor in, reference-only display
+        // handles out. A staged write mutates the document: the cached
+        // snapshot invalidates like every write path.
+        match self.request(PluginRequest::StagePluginClassInstance {
+            instance: instance.clone(),
+        }) {
+            Ok(PluginResponse::StagePluginClassInstanceResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected instance staging response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn plugin_class_instance_properties(
+        &self,
+        handle: Handle,
+    ) -> Result<Vec<crate::host::PluginClassParameterRow>, String> {
+        // API v14: a pure read (the record row stays the values' truth):
+        // no document mutation, no cache effect.
+        match self.request(PluginRequest::PluginClassInstanceProperties { handle }) {
+            Ok(PluginResponse::PluginClassInstancePropertiesResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!(
+                "unexpected class instance properties response: {other:?}"
+            )),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn show_dialog(&mut self, dialog: crate::dialog::DialogDef) -> crate::dialog::DialogResponse {
+        match self.request(PluginRequest::ShowDialog(dialog)) {
+            Ok(PluginResponse::DialogResult(res)) => res,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ShowDialog response: {other:?}");
+                crate::dialog::DialogResponse::Cancelled
+            }
+            Err(e) => {
+                eprintln!("[plugin] ShowDialog request failed: {e}");
+                crate::dialog::DialogResponse::Cancelled
+            }
+        }
+    }
+
+    fn register_panel(&mut self, panel: crate::dialog::PanelDef) -> bool {
+        match self.request(PluginRequest::RegisterPanel(panel)) {
+            Ok(PluginResponse::PanelRegistered(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected RegisterPanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] RegisterPanel request failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn update_panel(
+        &mut self,
+        panel_id: &str,
+        values: std::collections::HashMap<String, crate::dialog::DialogValue>,
+    ) -> bool {
+        match self.request(PluginRequest::UpdatePanel {
+            panel_id: panel_id.to_string(),
+            values,
+        }) {
+            Ok(PluginResponse::PanelUpdated(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected UpdatePanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] UpdatePanel request failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn toggle_panel(&mut self, panel_id: &str, show: Option<bool>) -> bool {
+        match self.request(PluginRequest::TogglePanel {
+            panel_id: panel_id.to_string(),
+            show,
+        }) {
+            Ok(PluginResponse::PanelToggled(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected TogglePanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] TogglePanel request failed: {e}");
+                false
+            }
+        }
+    }
+    fn ensure_layers(&mut self, defs: Vec<crate::host::LayerDef>) -> usize {
+        match self.request(PluginRequest::EnsureLayers(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLayers response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLayers failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_linetypes(&mut self, defs: Vec<crate::host::LinetypeDef>) -> usize {
+        match self.request(PluginRequest::EnsureLinetypes(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLinetypes response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLinetypes failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_text_styles(&mut self, defs: Vec<crate::host::TextStyleDef>) -> usize {
+        match self.request(PluginRequest::EnsureTextStyles(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureTextStyles response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureTextStyles failed: {e}");
+                0
+            }
+        }
+    }
+
+
+    // ── API v5 (OCSMechanical) ──────────────────────────────────────────────
+    fn selected_handles(&self) -> Vec<Handle> {
+        match self.request(PluginRequest::SelectedHandles) {
+            Ok(PluginResponse::Handles(handles)) => handles,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SelectedHandles response: {other:?}");
+                Vec::new()
+            }
+            Err(e) => {
+                eprintln!("[plugin] SelectedHandles failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn set_current_layer(&mut self, name: &str) -> bool {
+        match self.request(PluginRequest::SetCurrentLayer(name.to_string())) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SetCurrentLayer response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] SetCurrentLayer failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
+        match self.request(PluginRequest::ShowFramePicker(frames)) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ShowFramePicker response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] ShowFramePicker failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn take_pending_frame_selection(&mut self) -> Option<crate::host::FrameSelection> {
+        match self.request(PluginRequest::TakePendingFrameSelection) {
+            Ok(PluginResponse::FrameSelection(sel)) => sel,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected TakePendingFrameSelection response: {other:?}");
+                None
+            }
+            Err(e) => {
+                eprintln!("[plugin] TakePendingFrameSelection failed: {e}");
+                None
+            }
+        }
+    }
+
 }
 
 #[cfg(test)]

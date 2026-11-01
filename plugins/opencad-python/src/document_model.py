@@ -735,9 +735,7 @@ class _Modify:
             lambda c: c.text(radius),
             lambda c: c.entity(first, self._at(first, at1)),
             lambda c: c.entity(second, self._at(second, at2)),
-            lambda c: c.enter(),
-        ]
-        return self._run("FILLET", steps)
+        ])
 
     def move(self, entities, base, target):
         self._run("MOVE", [lambda c: c.point(base), lambda c: c.point(target)], entities)
@@ -839,6 +837,7 @@ class _Modify:
         original. Returns the copies."""
         return self._run("ARRAYPATH", [
             lambda c: c.entity(path, self._at(path, at)),
+            lambda c: c.token("DIVIDE"),
             lambda c: c.text(count),
         ], entities)
 

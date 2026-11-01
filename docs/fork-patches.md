@@ -467,21 +467,78 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 >
 > **未做**：没有安全部署 `.so` 到运行目录，也没有重启用户现有 GUI/MCP；真实 Python IPC、GUI C11/P6 像素和 CHAMFER 现场验证仍按问题清单保留。合并 diff 相对上游仍包含 origin 带入的空白诊断（`git diff --check 62074cf9..origin/main` 计 136 行），本次不做全树格式化。
 
-## 1. 补丁总表（基准：上游 `origin/main` `2a2d9b55` → 合并 `913e42d3`，**70 文件 / +17210 −463**，不含插件本体）
+## 0.17 上游同步执行记录（2026-11-01，`origin/main` `6ccfb142f` / **986 提交**，含 v2026.43）
+
+> 合并提交：见 `git log --grep "上游同步 2026-11-01"`（父：fork `ef14525b9` + 上游 `6ccfb142f`）。
+> 安全网：分支 `backup/pre-2026.43`、tag `presync-2026-11-01-ef14525b9`。
+> 上次同步基座 `66630db4a`（`e5a5f81da`）；本轮上游 **+180663 −21712 / 773 文件**，双方共同改动 93 文件。
+> ⚠️ 本地 `git tag` 当时只到 `v2026.41`，`fetch --tags` 后才出现 **`v2026.42` / `v2026.43`**
+> —— 又一次验证「本地没有 ≠ 上游没有」。
+
+### 冲突（37 文件 / 约 150 处，`-X no-renames` 预演时为 30 文件）
+
+| 区域 | 处置要点 |
+|---|---|
+| `crates/ocs_plugin_api/**`（9 文件） | 上游 v7–v14 的方法/枚举变体排在**前**，fork 的 v5 段整段接在其后（保持 vtable 与 IPC 线上位置）；`API_VERSION` 取 **14**。 |
+| `src/app/plugin_host.rs` | 11 处真逻辑（v5 HostApi 段串联、`is_selection_gathering`、`CommandStep::Dispatch`、`plugin_dialog_state`）+ 26 处测试段 `CadDocument`→`Document` 改名。 |
+| `src/app/automation.rs` | `query` 被上游重写（通配层匹配 + `xdata_app`）：fork 的 `include:"attributes"` 扫描与「`"0"` 是合法层名」语义**重新贴回**到上游新循环上。 |
+| `src/command.rs` | 上游新增 `S`/`D` 别名：**只取 `S`**，`D` 继续留给 OCSM 的 QDIM（`src/app/alias.rs` 的 version-10 改写保留，并入上游的 `retargeted_at(10)`）。 |
+| `src/ui/dock.rs` | `PanelId::ALL` 并集 = **14**（fork `Pi` + 上游 `Laywalk`/`QuickCalc`）。 |
+| `src/ui/overlay.rs` / `src/app/update/viewport.rs` | fork 的 `hide_crosshair` / `plugin_osnap` 与上游 `short_arms` / `is_selection_gathering` 并集。 |
+| `docs/*`、`changelogs/*` | 双方段落都保留。 |
+
+### 结构性变更（本轮真正的工作量）
+
+1. **codec 二次改名**：`opencadcodec`(`acadrust`) → **`opencaddocument`**（新仓 `HakanSeven12/opencaddocument`，rev `d657f94`），
+   它内部再依赖 `acadrust`（新仓 `HakanSeven12/acadrust`，rev `53e6420`）。
+   关键缓解：`opencaddocument::Document` 是 `acadrust::CadDocument` 的 `#[serde(transparent)]` newtype + `Deref/DerefMut` + 双向 `From`
+   ⇒ **插件侧 1693 处 `CadDocument` 不需要改**；`ocs_plugin_api::host` 补了一个 `pub use codec::CadDocument;` 兼容别名，
+   只有**边界**（`HostApi::document()` 返回 `&Document`、`PluginResponse::Document(Box<Document>)`、测试桩字段）要做 `.into()`。
+   `crates/ocs_plugin_api/build.rs` 仍按 `Cargo.lock` 里的 **`acadrust`** 包取名（上游保持了这个名字），锁文件已随新 pin 重新生成。
+2. **插件 API v13 → v14**：OCSM 的 `MANIFEST.api_version` 与 `plugin.toml` 的 `api_version` 一并改为 **14**。
+   v14 起插件自带 runner 循环（`export_plugin!` 导出 `ocs_plugin_run`），**不再要求与宿主同 rustc / 同 codec commit**，
+   改为校验 codec 类型的 wire-schema 指纹（`OCS_WIRE_SCHEMA`）。`plugin.toml` 的 `acadrust_source` 键名不变、值仍需部署时重取。
+3. **undo 组撞车（fork 补丁退役）**：上游 `6fca8eaea` 用 `begin_undo_group` / `end_undo_group` +
+   `PendingHistorySnapshot.held` 实现了与我们 `begin_undo` / `commit_undo` + `deferred` **同一个功能**。
+   本轮**改用上游**：删除 fork 的 `PluginRequest::BeginUndo/CommitUndo` 与 `HostApi::begin_undo/commit_undo`，
+   OCSM 的 `guide_server` / `lib.rs` 调用点全部改名。
+
+### 合并后发现并修正的兼容项
+
+* `src/modules/draw/modify/trim.rs`：`on_hover_entity` 里上游与 fork 各留了一个 `Hatch` 匹配臂（前一个把后一个遮成 unreachable），
+  合并成一个（保留 fork 的「独立圆形填充整体删除」预览）；`entity_pick_includes_fills` 恢复 `Pick | Erase`。
+* `src/io/mod.rs`：`repair_drawing` 的签名被 fork 的损坏实体守卫插断，已还原上游函数体、守卫另起一段。
+* `src/app/history.rs`：`begin_deferred_undo` / `commit_deferred_undo` 退役删除。
+* `src/mcp.rs`：`TOOL_SCHEMA_DIGEST` 按新工具面重算为 `4eb2f198…`。
+* `src/app/control/sheets.rs`、`src/io/mod.rs`：`Document` newtype 下不能再用「按字段拆分借用」的写法，
+  改成先 `&mut **document` 拿到 `CadDocument` 再拆。
+* 上游自带未修项：`benches/performance_benchmarks.rs` 在 `origin/main` 上就编不过（`selection_overlay` 少一个参数、
+  `AuthoringVisualOptions: Default` 未实现）。**保持与上游逐字节一致**，不在 fork 侧修；`--all-targets` 会被它挡住，
+  验证用 `--lib --tests` / `--workspace`。
+
+### 验证（合并树）
+
+* `cargo check --lib --tests`：✅
+* `cargo check -p ocs_plugin_api --all-targets --features host`：✅
+* `tools/cargo_guarded.sh test -p OpenCADStudio --lib`：**3889 passed / 0 failed / 32 ignored**
+* `tools/cargo_guarded.sh test -p ocs_ocsm`：**946 passed / 0 failed / 25 ignored**
+* 尚未做：release 宿主与插件重编、`plugin.toml` 指纹重写、真机 GUI 复测（面板布局 / LAYWALK / OCSM 冒烟）。
+
+## 1. 补丁总表（基准：上游 `origin/main` `6ccfb142f` → 合并 `2026-11-01`，见 §0.17）
 
 > A–E 组的行数是 v2026.36 基准时的记录（功能性描述仍适用）；F 组为 2026-09-16 新增。
 
 | 组 | 文件 | 规模 | 作用 |
 |---|---|---|---|
-| **A. 插件 API v5（基础设施）** | `crates/ocs_plugin_api/src/host.rs` | +349 | HostApi 扩展方法 + 数据类型 |
+| **A. 插件 API v5（基础设施）** | `crates/ocs_plugin_api/src/host.rs` | +349 | HostApi 扩展方法 + 数据类型。**2026-11-01 起 `API_VERSION = 14`**：fork 段整体接在上游 v7–v14 之后 |
 | | `crates/ocs_plugin_api/src/ipc/protocol.rs` | +238 | `PluginRequest/Response` 追加变体 |
 | | `crates/ocs_plugin_api/src/ipc/client.rs` | +155 | 代理转发（V2/V3） |
 | | `crates/ocs_plugin_api/src/ipc/v4/client.rs` | +177 | V4 代理转发 |
 | | `crates/ocs_plugin_api/src/ipc/server.rs` | +19 | 服务端分发 |
 | | `crates/ocs_plugin_api/src/process.rs` / `process/v4.rs` / `runner.rs` | +123 / +6 / +208 | 交互命令、预览实体、通知 |
-| | `crates/ocs_plugin_api/src/manifest.rs` | +7 | `API_VERSION` 4 → **5** |
+| | `crates/ocs_plugin_api/src/manifest.rs` | +7 | `API_VERSION` 4 → 5（2026-11-01 起上游已到 **14**，fork 只在 14 之后追加） |
 | | `Cargo.toml` | +5 | workspace 成员（ocs_ocsm / ocs_ocsm_mcp）+ **codec rev pin**（`[patch]` 镜像段已于 2026-09-28 摘除，见 §2 A-3） |
-| **B. 宿主落地与 UI** | `src/app/plugin_host.rs` | +1095 | v5 请求在宿主的实现 |
+| **B. 宿主落地与 UI** | `src/app/plugin_host.rs` | +1095 | v5 请求在宿主的实现。⚠️ **2026-11-01**：`begin_undo`/`commit_undo`（`PendingHistorySnapshot.deferred`）**已退役**，改用上游 v14 的 `begin_undo_group`/`end_undo_group` + `held` |
 | | `src/app/update/mod.rs` | +96 | drain 插件请求 + 图框选择回调 |
 | | `src/app/view/modal.rs` | +75 | `OcsmFramePicker` 模态框 |
 | | `src/app/mod.rs` | +38 | 图框选择/待取状态 |

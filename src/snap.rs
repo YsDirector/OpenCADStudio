@@ -26,6 +26,9 @@ pub enum TrackingKind {
     Generic,
     Extension,
     Perpendicular,
+    /// Ortho / polar along the UCS Z axis in a 3D view, up or down.
+    PlusZ,
+    MinusZ,
 }
 /// Every OSNAP mode — mirrors the OpenCADStudio list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -377,6 +380,10 @@ pub struct Snapper {
     /// the override mode and `snap_enabled` is forced on — the override works
     /// even with running osnap off (#337).
     override_saved: Option<(HashSet<SnapType>, bool)>,
+    /// OSNAPZ: object snaps land on this plane (a point on it and its
+    /// normal: the current UCS at the current elevation) instead of keeping
+    /// the snapped object's height. `None` keeps the object's point.
+    pub osnap_z_plane: Option<(DVec3, DVec3)>,
 }
 
 impl Default for Snapper {
@@ -388,7 +395,6 @@ impl Default for Snapper {
         enabled.insert(SnapType::Node);
         enabled.insert(SnapType::Quadrant);
         enabled.insert(SnapType::Intersection);
-        enabled.insert(SnapType::Nearest);
         let mut enabled3d = HashSet::default();
         enabled3d.insert(SnapType::Vertex);
         enabled3d.insert(SnapType::EdgeMidpoint);
@@ -421,6 +427,7 @@ impl Default for Snapper {
             parallel_ref: None,
             parallel_dwell: None,
             override_saved: None,
+            osnap_z_plane: None,
         }
     }
 }
@@ -1304,6 +1311,7 @@ impl Snapper {
             parallel_ref: None,
             parallel_dwell: None,
             override_saved: None,
+            osnap_z_plane: None,
         };
         // Tangent-only: Grid is disabled here, so the grid basis is irrelevant.
         tmp.snap(
@@ -1420,7 +1428,15 @@ impl Snapper {
             } else {
                 self.snap_enabled && self.is_on(snap_type)
             };
-            on.then_some(snap_type)
+            // A solid's vertices and edge middles also answer the 2D
+            // Endpoint and Midpoint modes (#2153).
+            let planar = match hint {
+                SnapHint::Vertex => Some(SnapType::Endpoint),
+                SnapHint::EdgeMidpoint => Some(SnapType::Midpoint),
+                _ => None,
+            }
+            .filter(|planar| self.snap_enabled && self.is_on(*planar));
+            on.then_some(snap_type).or(planar)
         };
         if let Some(points) = wires.snap_points() {
             for point_ref in points {
@@ -1558,6 +1574,18 @@ impl Snapper {
             construction_ray,
             &[],
         )
+        .map(|hit| self.on_osnap_z_plane(hit))
+    }
+
+    /// The snapped point moved onto the OSNAPZ plane along its normal; a grid
+    /// point already lies on the drafting plane.
+    pub fn on_osnap_z_plane(&self, mut hit: SnapResult) -> SnapResult {
+        if let Some((origin, normal)) = self.osnap_z_plane {
+            if hit.snap_type != SnapType::Grid {
+                hit.world -= normal * (hit.world - origin).dot(normal);
+            }
+        }
+        hit
     }
 
     /// Find the best snap candidate while also testing extra construction rays
@@ -1777,16 +1805,26 @@ impl Snapper {
             return best;
         }
 
+        // A sweep that has already projected a candidate (for its aperture
+        // gate) stashes that bit-identical `screen` here so `try_pt` reuses it
+        // instead of recomputing `world_to_screen`. The slot is consumed by
+        // every `try_pt` call, so it can never go stale.
+        let pre_screen = std::cell::Cell::new(None::<Point>);
+
         let mut try_pt = |world: glam::DVec3,
                           snap_type: SnapType,
                           src: Option<DimensionAssociationSource>,
                           secondary: Option<DimensionAssociationSource>| {
+            let cached = pre_screen.take();
             // Masters are per-system: 2D candidates need the 2D master, 3D
             // solid candidates answer only to the F4 master.
             if !snap_type.is_3d() && !self.snap_enabled {
                 return;
             }
-            let screen = world_to_screen(world, view_rot, eye, bounds);
+            let screen = match cached {
+                Some(s) => s,
+                None => world_to_screen(world, view_rot, eye, bounds),
+            };
             if !in_bounds(screen) {
                 return;
             }
@@ -2125,15 +2163,30 @@ impl Snapper {
 
                 // Exact cursor-local sweep: never discard a valid intersection
                 // in dense geometry. Min-X ordering plus Y overlap avoids
-                // comparing segment pairs whose bounds cannot meet.
+                // comparing segment pairs whose bounds cannot meet. The
+                // pairwise-work budget is counted inside this same pass: hits
+                // are buffered and replayed only when the sweep finishes
+                // within budget, so exceeding the cap contributes nothing
+                // while an in-budget sweep no longer pays for a duplicate
+                // counting iteration. (A cursor within float tolerance of a
+                // segment breaks out before the cap and keeps its hits.)
                 let mut local: Vec<&IndexedSegment> = segments.iter().collect();
                 local.sort_by(|a, b| a.min_x().total_cmp(&b.min_x()));
-                if indexed_sweep_within_budget(&local) {
+                SWEEP_PENDING.with(|cell| {
+                    let mut pending = cell.borrow_mut();
+                    pending.clear();
+                    let mut work = 0usize;
+                    let mut within_budget = true;
                     'intersection_sweep: for i in 0..local.len() {
                         let a = local[i];
                         for &b in local.iter().skip(i + 1) {
                             if b.min_x() > a.max_x() {
                                 break;
+                            }
+                            work += 1;
+                            if work > MAX_INDEXED_PAIRWISE_WORK {
+                                within_budget = false;
+                                break 'intersection_sweep;
                             }
                             let same_wire_neighbours =
                                 a.wire == b.wire && segments_share_endpoint(a.a, a.b, b.a, b.b);
@@ -2147,31 +2200,43 @@ impl Snapper {
                             if wires
                                 .source_wire(a.wire)
                                 .zip(wires.source_wire(b.wire))
-                                .is_some_and(|(a, b)| resolved_pairs.contains(&pair_key(a, b)))
+                                .is_some_and(|(wa, wb)| resolved_pairs.contains(&pair_key(wa, wb)))
                             {
                                 continue;
                             }
                             if let Some(pt) = seg_intersect_3d(a.a, a.b, b.a, b.b) {
-                                let exact_cursor = dist2(
-                                    world_to_screen(pt, view_rot, eye, bounds),
-                                    cursor_screen,
-                                ) <= f32::EPSILON;
-                                let primary = wires.source_wire(a.wire).and_then(wire_source);
-
-                                let secondary = if a.wire == b.wire {
-                                    None
-                                } else {
-                                    wires.source_wire(b.wire).and_then(wire_source)
-                                };
-
-                                try_pt(pt, SnapType::Intersection, primary, secondary);
-                                if exact_cursor {
+                                // One projection serves the aperture gate, the
+                                // exact-cursor exit below, and the buffered
+                                // replay: its values are bit-identical to what
+                                // `try_pt` would compute, so the replay accepts
+                                // exactly the hits a direct call would have
+                                // evaluated and skips the duplicate projection.
+                                let screen = world_to_screen(pt, view_rot, eye, bounds);
+                                let d2 = dist2(screen, cursor_screen);
+                                if in_bounds(screen) && d2 < radius2 {
+                                    pending.push((pt, screen, a.wire, b.wire));
+                                }
+                                if d2 <= f32::EPSILON {
                                     break 'intersection_sweep;
                                 }
                             }
                         }
                     }
-                }
+                    if within_budget {
+                        for (pt, screen, wire_a, wire_b) in pending.drain(..) {
+                            let primary = wires.source_wire(wire_a).and_then(wire_source);
+
+                            let secondary = if wire_a == wire_b {
+                                None
+                            } else {
+                                wires.source_wire(wire_b).and_then(wire_source)
+                            };
+
+                            pre_screen.set(Some(screen));
+                            try_pt(pt, SnapType::Intersection, primary, secondary);
+                        }
+                    }
+                });
             } else if pairwise_wires.len() >= 2 {
                 for (i, &wire_i) in pairwise_wires.iter().enumerate() {
                     for &wire_j in &pairwise_wires[i + 1..] {
@@ -2310,7 +2375,17 @@ impl Snapper {
                     })
                     .collect();
                 projected.sort_by(|a, b| a.3[0].total_cmp(&b.3[0]));
-                if projected_sweep_within_budget(&projected) {
+                // Budget fused into this same pass — see the world-space
+                // sweep above for the buffering rationale. Hits are pre-gated
+                // with the exact `try_pt` conditions and their bit-identical
+                // projected screen is carried alongside, so the buffered
+                // replay accepts exactly the hits a direct in-loop call would
+                // have evaluated, in the same order, without projecting twice.
+                SWEEP_PENDING.with(|cell| {
+                    let mut pending = cell.borrow_mut();
+                    pending.clear();
+                    let mut work = 0usize;
+                    let mut within_budget = true;
                     'apparent_sweep: for i in 0..projected.len() {
                         let (segment_a, screen_a0, screen_a1, aabb_a) = projected[i];
                         for &(segment_b, screen_b0, screen_b1, aabb_b) in
@@ -2318,6 +2393,11 @@ impl Snapper {
                         {
                             if aabb_b[0] > aabb_a[2] {
                                 break;
+                            }
+                            work += 1;
+                            if work > MAX_INDEXED_PAIRWISE_WORK {
+                                within_budget = false;
+                                break 'apparent_sweep;
                             }
                             if segment_a.wire == segment_b.wire
                                 || aabb_a[3] < aabb_b[1]
@@ -2328,23 +2408,34 @@ impl Snapper {
                             if let Some((ta, _)) =
                                 seg_intersect_2d(screen_a0, screen_a1, screen_b0, screen_b1)
                             {
+                                let world_pt =
+                                    segment_a.a + ta as f64 * (segment_a.b - segment_a.a);
                                 let apparent_screen = Point::new(
                                     screen_a0.x + ta * (screen_a1.x - screen_a0.x),
                                     screen_a0.y + ta * (screen_a1.y - screen_a0.y),
                                 );
-                                try_pt(
-                                    segment_a.a + ta as f64 * (segment_a.b - segment_a.a),
-                                    SnapType::ApparentIntersection,
-                                    wires.source_wire(segment_a.wire).and_then(wire_source),
-                                    wires.source_wire(segment_b.wire).and_then(wire_source),
-                                );
+                                let screen = world_to_screen(world_pt, view_rot, eye, bounds);
+                                if in_bounds(screen) && dist2(screen, cursor_screen) < radius2 {
+                                    pending.push((world_pt, screen, segment_a.wire, segment_b.wire));
+                                }
                                 if dist2(apparent_screen, cursor_screen) <= f32::EPSILON {
                                     break 'apparent_sweep;
                                 }
                             }
                         }
                     }
-                }
+                    if within_budget {
+                        for (pt, screen, wire_a, wire_b) in pending.drain(..) {
+                            pre_screen.set(Some(screen));
+                            try_pt(
+                                pt,
+                                SnapType::ApparentIntersection,
+                                wires.source_wire(wire_a).and_then(wire_source),
+                                wires.source_wire(wire_b).and_then(wire_source),
+                            );
+                        }
+                    }
+                });
             } else if pairwise_wires.len() >= 2 {
                 let screen_pts: Vec<Vec<Point>> = pairwise_wires
                     .iter()
@@ -2868,6 +2959,73 @@ impl Snapper {
             }
         }
 
+        // Nothing caught in the aperture: the object under the cursor offers
+        // its nearest enabled discrete point, so an endpoint or a midpoint
+        // need not be hunted for (#1914). With Nearest on, the point on the
+        // curve is always nearer and stands.
+        if self.snap_enabled
+            && matches!(
+                best.as_ref().map(|b| b.snap_type),
+                None | Some(SnapType::Grid)
+            )
+        {
+            let near_cursor = |a: DVec3, b: DVec3| {
+                let foot = nearest_on_segment(cursor_world, a, b);
+                dist2(world_to_screen(foot, view_rot, eye, bounds), cursor_screen) < radius2
+            };
+            let mut hovered: Vec<&WireModel> = Vec::new();
+            if let Some(segments) = &local_segments {
+                for segment in segments {
+                    let Some(wire) = wires.source_wire(segment.wire) else {
+                        continue;
+                    };
+                    if !hovered.iter().any(|known| std::ptr::eq(*known, wire))
+                        && near_cursor(segment.a, segment.b)
+                    {
+                        hovered.push(wire);
+                    }
+                }
+            } else {
+                hovered.extend(in_range_wires.iter().filter(|wire| {
+                    (0..wire.points.len().saturating_sub(1))
+                        .any(|i| near_cursor(wp_f64(wire, i), wp_f64(wire, i + 1)))
+                }));
+            }
+            let mut nearest: Option<(f32, SnapResult)> = None;
+            for wire in hovered {
+                self.for_each_discrete_feature(
+                    std::slice::from_ref(wire),
+                    || std::iter::once(wire),
+                    |world, snap_type, source| {
+                        let screen = world_to_screen(world, view_rot, eye, bounds);
+                        let d2 = dist2(screen, cursor_screen);
+                        if in_bounds(screen) && nearest.as_ref().map_or(true, |(n, _)| d2 < *n) {
+                            nearest = Some((
+                                d2,
+                                SnapResult {
+                                    world,
+                                    screen,
+                                    snap_type,
+                                    tangent_obj: None,
+                                    extension_base: None,
+                                    extension_base2: None,
+                                    extension_origin: None,
+                                    extension_dir: None,
+                                    viewport: None,
+                                    source,
+                                    secondary_source: None,
+                                    model_point: None,
+                                },
+                            ));
+                        }
+                    },
+                );
+            }
+            if let Some((_, found)) = nearest {
+                best = Some(found);
+            }
+        }
+
         // If an Extension snap or an extended intersection won, re-find the
         // endpoint(s) whose ray(s) it lies on so the overlay can draw the dashed
         // guide line(s) back to them. An Extension yields one base; an extended
@@ -3166,42 +3324,17 @@ impl IndexedSegment {
 
 const MAX_INDEXED_PAIRWISE_WORK: usize = 500_000;
 
-fn indexed_sweep_within_budget(segments: &[&IndexedSegment]) -> bool {
-    let mut work = 0usize;
-    for (index, &a) in segments.iter().enumerate() {
-        for &b in segments.iter().skip(index + 1) {
-            if b.min_x() > a.max_x() {
-                break;
-            }
-            work += 1;
-            if work > MAX_INDEXED_PAIRWISE_WORK {
-                return false;
-            }
-            if a.wire == b.wire || a.max_y() < b.min_y() || a.min_y() > b.max_y() {
-                continue;
-            }
-        }
-    }
-    true
-}
-
-fn projected_sweep_within_budget(segments: &[(&IndexedSegment, Point, Point, [f32; 4])]) -> bool {
-    let mut work = 0usize;
-    for (index, &(a, _, _, aabb_a)) in segments.iter().enumerate() {
-        for &(b, _, _, aabb_b) in segments.iter().skip(index + 1) {
-            if aabb_b[0] > aabb_a[2] {
-                break;
-            }
-            work += 1;
-            if work > MAX_INDEXED_PAIRWISE_WORK {
-                return false;
-            }
-            if a.wire == b.wire || aabb_a[3] < aabb_b[1] || aabb_a[1] > aabb_b[3] {
-                continue;
-            }
-        }
-    }
-    true
+thread_local! {
+    // The fused sweeps buffer their accepted hits so an over-budget sweep can
+    // discard them wholesale (matching the old counting pass's bail). Keeping
+    // the buffer alive across `snap` calls — rather than allocating per call —
+    // leaves its pages mapped and avoids recurring page-fault stalls. The
+    // initializer is already wrapped in `const {}`; the allow silences a
+    // `missing_const_for_thread_local` false positive on this shape.
+    #[allow(clippy::missing_const_for_thread_local)]
+    static SWEEP_PENDING: std::cell::RefCell<Vec<(DVec3, Point, u32, u32)>> = const {
+        std::cell::RefCell::new(Vec::new())
+    };
 }
 
 fn indexed_segments<W: WireSource + ?Sized>(wires: &W) -> Option<Vec<IndexedSegment>> {

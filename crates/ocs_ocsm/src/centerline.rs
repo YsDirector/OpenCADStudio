@@ -447,7 +447,7 @@ pub(crate) fn cmd_centerline(host: &mut dyn HostApi) {
         }
         host.push_info(&crate::i18n::t("cmd.centerline.err.bad_selection"));
     }
-    host.start_interactive(Box::new(CenterLinePick::new(doc)));
+    host.start_interactive(Box::new(CenterLinePick::new(doc.into())));
 }
 
 /// 图层/线型基建（`OCSM` 没跑过的图也能直接用）。

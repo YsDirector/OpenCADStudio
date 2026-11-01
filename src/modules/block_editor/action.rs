@@ -143,7 +143,7 @@ impl CadCommand for ActionCommand {
         }
         if self.kind.is_none() {
             return crate::t!(
-                "BACTION  Enter action type [Move/Scale/Stretch/Polar Stretch/Rotate/Flip/Array]:"
+                "BACTION  Enter action type [Move/Scale/Stretch/Polar Stretch/Rotate/Flip/Array/Lookup]:"
             )
             .into_owned();
         }
@@ -161,6 +161,10 @@ impl CadCommand for ActionCommand {
             .into_owned();
         }
         if self.kind.is_some_and(actions::needs_frame) && self.frame.is_empty() {
+            if self.kind == Some(Kind::PolarStretch) {
+                let point = if self.xy_key_point == Some(XyKeyPoint::Base) { "Base" } else { "End" };
+                return crate::tf!("BACTION  Specify first corner of action frame or [CPolygon/Base/End] <{point}>:").into_owned();
+            }
             if let Some(point) = self.xy_key_point {
                 let point = match point {
                     XyKeyPoint::Base => "base",
@@ -194,16 +198,27 @@ impl CadCommand for ActionCommand {
                 .into_owned();
         }
         if self.kind == Some(Kind::Array) {
-            let is_xy = self
+            let chosen = self
                 .candidates
                 .iter()
-                .find(|p| Some(p.handle) == self.parameter)
-                .is_some_and(|p| p.xy);
+                .find(|p| Some(p.handle) == self.parameter);
+            let is_xy = chosen.is_some_and(|p| p.xy);
+            let is_polar = chosen.is_some_and(|p| p.polar);
             if self.column_offset.is_none() {
-                return crate::t!(
-                    "BACTION  Specify distance between columns (or distance between items):"
-                )
-                .into_owned();
+                // One term per array shape: an angular pattern arrays items, a
+                // grid arrays columns and rows, and the alternative named here
+                // is the term the next prompt asks for.
+                if is_polar {
+                    return crate::t!("BACTION  Specify distance between items:").into_owned();
+                }
+                return if is_xy {
+                    crate::t!(
+                        "BACTION  Specify distance between columns (or distance between rows):"
+                    )
+                    .into_owned()
+                } else {
+                    crate::t!("BACTION  Specify distance between columns:").into_owned()
+                };
             }
             if is_xy && self.row_offset.is_none() {
                 return crate::t!("BACTION  Specify distance between rows:").into_owned();
@@ -229,6 +244,7 @@ impl CadCommand for ActionCommand {
                 CmdOption::new("Rotate", "Rotate"),
                 CmdOption::new("Flip", "Flip"),
                 CmdOption::new("Array", "Array"),
+                CmdOption::new("Lookup", "Lookup"),
             ]
         } else if self.parameter.is_some()
             && self.kind.is_some_and(actions::needs_frame)
@@ -240,7 +256,11 @@ impl CadCommand for ActionCommand {
                     CmdOption::new("Close", "Close"),
                 ]
             } else if self.frame.is_empty() {
-                vec![CmdOption::new("CPolygon", "CPolygon")]
+                let mut options = vec![CmdOption::new("CPolygon", "CPolygon")];
+                if self.kind == Some(Kind::PolarStretch) {
+                    options.extend([CmdOption::new("Base", "Base"), CmdOption::new("End", "End")]);
+                }
+                options
             } else {
                 vec![]
             }
@@ -262,6 +282,14 @@ impl CadCommand for ActionCommand {
         }
     }
     fn on_text_input(&mut self, s: &str) -> Option<CmdResult> {
+        if self.parameter.is_some() && self.kind == Some(Kind::PolarStretch) && self.frame.is_empty() && !self.frame_done {
+            let key = match s.trim().to_ascii_uppercase().as_str() {
+                "BASE" | "B" => Some(XyKeyPoint::Base),
+                "END" | "E" => Some(XyKeyPoint::End),
+                _ => None,
+            };
+            if let Some(key) = key { self.xy_key_point = Some(key); return Some(CmdResult::NeedPoint); }
+        }
         if self.parameter.is_some()
             && self.kind.is_some_and(actions::needs_frame)
             && !self.frame_done
@@ -317,13 +345,24 @@ impl CadCommand for ActionCommand {
             }
         }
         if self.kind.is_none() {
+            if matches!(
+                s.trim().to_ascii_uppercase().as_str(),
+                "LOOKUP" | "L"
+            ) {
+                return Some(CmdResult::StartBlockLookupAction {
+                    document: self.document,
+                    definition: self.definition,
+                });
+            }
             return Some(if let Some(k) = Kind::parse(s) {
                 self.kind = Some(k);
                 CmdResult::NeedPoint
             } else {
                 CmdResult::ReportError(
-                    crate::t!("Choose Move, Scale, Stretch, Polar Stretch, Rotate, Flip or Array.")
-                        .into_owned(),
+                    crate::t!(
+                        "Choose Move, Scale, Stretch, Polar Stretch, Rotate, Flip, Array or Lookup."
+                    )
+                    .into_owned(),
                 )
             });
         }
@@ -354,7 +393,8 @@ impl CadCommand for ActionCommand {
             if self.column_offset.is_none() {
                 let Ok(dist) = s.trim().parse::<f64>() else {
                     return Some(CmdResult::ReportError(
-                        crate::t!("Specify a positive distance.").into_owned(),
+                        crate::t!("Specify a positive distance as a single value, not a point.")
+                            .into_owned(),
                     ));
                 };
                 if dist <= 1e-6 || !dist.is_finite() {
@@ -368,7 +408,8 @@ impl CadCommand for ActionCommand {
             if is_xy && self.row_offset.is_none() {
                 let Ok(dist) = s.trim().parse::<f64>() else {
                     return Some(CmdResult::ReportError(
-                        crate::t!("Specify a positive distance.").into_owned(),
+                        crate::t!("Specify a positive distance as a single value, not a point.")
+                            .into_owned(),
                     ));
                 };
                 if dist <= 1e-6 || !dist.is_finite() {
@@ -575,12 +616,38 @@ impl CadCommand for ActionCommand {
 }
 
 pub(crate) struct TestParameterCommand {
+    pub grip_input: Option<crate::scene::block_grips::runtime::Input>,
+    pub display_offset: DVec3,
     pub insert: Option<Handle>,
     pub document: u64,
     pub definition: Handle,
     pub parameter: Handle,
 }
+impl TestParameterCommand {
+    fn parameter_result(&self, position: DVec3) -> CmdResult {
+        CmdResult::EvaluateBlockParameter {
+            grip: self.grip_input.as_ref().map(|input| input.id),
+            insert: self.insert,
+            document: self.document,
+            definition: self.definition,
+            parameter: self.parameter,
+            value: self.grip_input.as_ref().map(|input| input.value(position))
+                .unwrap_or(actions::Value::Point(position - self.display_offset)),
+        }
+    }
+}
 impl CadCommand for TestParameterCommand {
+    fn block_parameter_preview(&self, cursor: DVec3) -> Option<CmdResult> {
+        Some(self.parameter_result(cursor))
+    }
+    fn cursor_plane(&self) -> Option<(DVec3, DVec3)> {
+        let input = self.grip_input.as_ref()?;
+        let normal = actions::v(input.to_world.apply_rotation(actions::native(DVec3::Z))).try_normalize()?;
+        Some((normal, actions::v(input.to_world.apply(actions::native(input.frame.base)))))
+    }
+    fn block_parameter_grip_id(&self) -> Option<usize> {
+        self.grip_input.as_ref().map(|input| input.id)
+    }
     fn block_parameter_target(&self) -> Option<(Option<Handle>, Handle)> {
         Some((self.insert, self.parameter))
     }
@@ -592,16 +659,10 @@ impl CadCommand for TestParameterCommand {
         }
     }
     fn prompt(&self) -> String {
-        crate::t!("Specify the new block parameter endpoint (Escape cancels):").into_owned()
+        crate::t!("Specify the new block parameter grip position (Escape cancels):").into_owned()
     }
     fn on_point(&mut self, position: DVec3) -> CmdResult {
-        CmdResult::EvaluateBlockParameter {
-            insert: self.insert,
-            document: self.document,
-            definition: self.definition,
-            parameter: self.parameter,
-            value: actions::Value::Point(position),
-        }
+        self.parameter_result(position)
     }
     fn on_enter(&mut self) -> CmdResult {
         CmdResult::Cancel

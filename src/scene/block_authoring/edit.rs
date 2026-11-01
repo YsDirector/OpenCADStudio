@@ -18,7 +18,7 @@ pub struct Item {
     pub graphic: Graphic,
     pub grips: Vec<(Part, Vector3)>,
 }
-pub fn items(doc: &CadDocument, definition: Handle) -> Vec<Item> {
+pub fn items(doc: &Document, definition: Handle) -> Vec<Item> {
     let mut result = vec![];
     for (handle, p) in crate::scene::block_point_parameter::parameters(doc, definition) {
         let mut graphic = Graphic::default();
@@ -44,15 +44,19 @@ pub fn items(doc: &CadDocument, definition: Handle) -> Vec<Item> {
             (Part::Base, p.native.definition_base_point),
             (Part::End, p.native.definition_end_point),
         ];
-        // Polar's second label is derived from its angle arc, not an editable offset.
-        grips.extend(
-            graphic
-                .labels
-                .iter()
-                .take(if p.kind == distance::Kind::XY { 2 } else { 1 })
-                .enumerate()
-                .map(|(i, (p, _))| (Part::Label(i), *p)),
-        );
+        // The polar label sits on the angle bisector and the XY labels on the
+        // dimension lines, both derived from the endpoint; only the linear
+        // label is an authored offset.
+        if p.kind == distance::Kind::Linear {
+            grips.extend(
+                graphic
+                    .labels
+                    .iter()
+                    .take(1)
+                    .enumerate()
+                    .map(|(i, (p, _))| (Part::Label(i), *p)),
+            );
+        }
         result.push(Item {
             handle: p.handle,
             name: p.labels.join(" / "),
@@ -129,8 +133,23 @@ pub fn items(doc: &CadDocument, definition: Handle) -> Vec<Item> {
     if let Some(p) = crate::scene::block_visibility::parameter(doc, definition) {
         result.push(single(p.handle, p.name.clone(), p.def_point));
     }
+    if let Ok(Some(owner)) = graph(doc, definition) {
+        for (handle, object) in &doc.objects {
+            if let ObjectType::DynamicBlock(object) = object {
+                if object.owner == owner {
+                    if let DynamicBlockData::PropertiesTable(table) = &object.data {
+                        result.push(single(*handle, table.parameter.parameter.element.name.clone(), table.parameter.definition_point));
+                    }
+                }
+            }
+        }
+    }
     for (handle, p, _, _) in crate::scene::block_actions::actions(doc, definition) {
         let mut item = single(handle, p.element.name.clone(), p.display_location);
+        if let Some(base) = crate::scene::block_actions::options::base(doc, handle).filter(|base| !base.dependent) {
+            item.grips.push((Part::Base, base.base_point));
+            item.graphic.lines.push([p.display_location, base.base_point]);
+        }
         let frame = crate::scene::block_actions::frame_outline(doc, handle);
         if !frame.is_empty() {
             item.graphic.lines.extend(
@@ -142,6 +161,9 @@ pub fn items(doc: &CadDocument, definition: Handle) -> Vec<Item> {
             );
         }
         result.push(item);
+    }
+    for item in &mut result {
+        let _ = crate::scene::block_grips::config::apply_graphic(doc, definition, item.handle, &mut item.graphic);
     }
     result
 }
@@ -179,7 +201,7 @@ fn grip(data: &mut DynamicBlockData) -> Option<&mut BlockGrip> {
     })
 }
 pub fn move_part(
-    doc: &mut CadDocument,
+    doc: &mut Document,
     definition: Handle,
     handle: Handle,
     part: Part,
@@ -204,6 +226,8 @@ pub fn move_part(
     if (at - old).length() < 1e-10 {
         return Ok(false);
     }
+    let native_grips = if crate::scene::block_grips::config::choices(doc, definition, handle).is_empty() { vec![] }
+        else { crate::scene::block_grips::config::locations(doc, definition, handle)? };
     let mut staged = doc.clone();
     if handle == definition
         || crate::scene::block_basepoint::parameter(doc, definition)
@@ -250,6 +274,10 @@ pub fn move_part(
                     return Err("Parameter endpoints must remain distinct and finite.");
                 }
             }
+            if let DynamicBlockData::XYParameter(p) = &mut object.data {
+                p.x_value = p.parameter.definition_end_point.x - p.parameter.definition_base_point.x;
+                p.y_value = p.parameter.definition_end_point.y - p.parameter.definition_base_point.y;
+            }
             match &mut object.data {
                 DynamicBlockData::PointParameter(p) => match part {
                     Part::Point => {
@@ -259,6 +287,10 @@ pub fn move_part(
                     Part::Label(_) => p.definition_label_point = at,
                     _ => {}
                 },
+                DynamicBlockData::PropertiesTable(p) => {
+                    p.parameter.definition_point = at;
+                    moved_grips.push((p.parameter.property_count, at));
+                }
                 DynamicBlockData::LookupParameter(p) => {
                     p.parameter.definition_point = at;
                     moved_grips.push((p.parameter.property_count, at))
@@ -273,19 +305,9 @@ pub fn move_part(
                         p.distance = label_offset(&p.parameter, at)
                     }
                 }
-                DynamicBlockData::PolarParameter(p) => {
-                    if let Part::Label(_) = part {
-                        p.offset = label_offset(&p.parameter, at)
-                    }
-                }
+                // Only the base and endpoint are draggable; the polar label follows them.
+                DynamicBlockData::PolarParameter(_) => {}
                 DynamicBlockData::XYParameter(p) => {
-                    if let Part::Label(index) = part {
-                        if index == 0 {
-                            p.x_value = at.y - p.parameter.definition_base_point.y
-                        } else {
-                            p.y_value = at.x - p.parameter.definition_base_point.x
-                        }
-                    }
                     if (p.parameter.definition_end_point.x - p.parameter.definition_base_point.x)
                         .abs()
                         < 1e-10
@@ -321,7 +343,12 @@ pub fn move_part(
                 DynamicBlockData::StretchAction(p) => p.action.display_location = at,
                 DynamicBlockData::FlipAction(p) => p.action.display_location = at,
                 DynamicBlockData::ScaleAction(p) | DynamicBlockData::RotateAction(p) => {
-                    p.action.action.display_location = at
+                    if part == Part::Base {
+                        crate::scene::block_actions::options::pivot(&p.action, glam::DVec3::new(at.x, at.y, at.z))?;
+                        p.action.base_point = at;
+                    } else {
+                        p.action.action.display_location = at;
+                    }
                 }
                 DynamicBlockData::AlignmentParameter(_) => {}
                 _ => return Err("This authoring object cannot be edited yet."),
@@ -386,7 +413,7 @@ pub fn move_part(
                     if o.owner == graph {
                         if let DynamicBlockData::LinearGrip(g) = &mut o.data {
                             if ids.contains(&g.grip.element.eval.node_id) {
-                                g.orientation = orientation;
+                                g.orientation = if ids[0] == g.grip.element.eval.node_id { orientation * -1.0 } else { orientation };
                             }
                         }
                     }
@@ -420,8 +447,16 @@ pub fn move_part(
             }
         }
     }
-    if let Some(ObjectType::BlockVisibilityParameter(p)) = staged.objects.get(&handle) {
-        staged.block_visibility_params.insert(handle, p.clone());
+    if let Some(ObjectType::BlockVisibilityParameter(p)) = staged.objects.get(&handle).cloned() {
+        staged.block_visibility_params.insert(handle, p);
+    }
+    if !native_grips.is_empty() {
+        let updated = crate::scene::block_grips::config::locations(&staged, definition, handle)?;
+        for original in native_grips {
+            let current = updated.iter().find(|grip| grip.handle == original.handle).ok_or("The native grip binding changed during the edit.")?;
+            let point = current.key_point + (original.point - original.key_point);
+            crate::scene::block_grips::config::set_location(&mut staged, definition, handle, original.role, point)?;
+        }
     }
     if let Some(item) = items(&staged, definition)
         .into_iter()
@@ -443,7 +478,7 @@ pub fn move_part(
 /// they are detached from both ends; actions left without any parameter can no
 /// longer drive anything and are removed with it.
 pub fn remove_parameter(
-    doc: &mut CadDocument,
+    doc: &mut Document,
     definition: Handle,
     handle: Handle,
 ) -> Result<(), &'static str> {

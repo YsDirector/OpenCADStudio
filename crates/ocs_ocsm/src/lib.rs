@@ -79,7 +79,10 @@ static MANIFEST: PluginManifest = PluginManifest {
     // 由 tests 守住；见 plugin_toml_version_matches_cargo_pkg_version）。
     version: env!("CARGO_PKG_VERSION"),
     description: "OCSM 初始化 + 数字键 1-10 快速图层 + 图框/标注转换 + 标准件与机械制图工具",
-    api_version: ApiVersion { major: 5 },
+    // API v14 (2026-11-01 同步): 插件自带 runner 循环（`export_plugin!` 导出
+    // `ocs_plugin_run`），不再要求与宿主同 rustc / 同 codec commit；跨 IPC 的
+    // codec 类型形状由宿主的 wire-schema 指纹把关。plugin.toml 的 api_version 同步。
+    api_version: ApiVersion { major: 14 },
     ribbon_order: 100,
     xdata_apps: &["OCSM_BOM"],
     command_prefixes: &[
@@ -2624,7 +2627,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: "OCSM 齿轮".to_string(),
             where_to: "请在齿轮窗口里点「生成到图纸」".to_string(),
-            doc: Some(host.document().clone()),
+            doc: Some(host.document().clone().into()),
         }));
     }
 
@@ -2666,7 +2669,7 @@ impl OcsmPlugin {
                 base: std::cell::Cell::new([0.0, 0.0, 0.0]),
                 what: crate::i18n::t("cmd.shaft.place.what"),
                 where_to: crate::i18n::t("cmd.shaft.place.where"),
-                doc: Some(host.document().clone()),
+                doc: Some(host.document().clone().into()),
             }));
             return;
         }
@@ -2861,7 +2864,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.hole.place_what"),
             where_to: crate::i18n::t("cmd.hole.hint.click_ok"),
-            doc: Some(host.document().clone()),
+            doc: Some(host.document().clone().into()),
         }));
     }
 
@@ -2915,7 +2918,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.parts.prompt.what"),
             where_to: crate::i18n::t("cmd.parts.prompt.where"),
-            doc: Some(host.document().clone()),
+            doc: Some(host.document().clone().into()),
         }));
     }
 
@@ -3022,7 +3025,7 @@ impl OcsmPlugin {
             base: std::cell::Cell::new([0.0, 0.0, 0.0]),
             what: crate::i18n::t("cmd.card.place.what"),
             where_to: crate::i18n::t("cmd.card.place.where"),
-            doc: Some(host.document().clone()),
+            doc: Some(host.document().clone().into()),
         }));
     }
 
@@ -3811,7 +3814,7 @@ impl OcsmPlugin {
                 // “可移动的先移动、锁定的跳过”用户口径，但把跨 IPC 的
                 // undo scope 改成 deferred transaction；若全部失败，则把
                 // 宿主的真实拒绝原因显示出来，而不是误报“移动 0 个”。
-                host.begin_undo(&label);
+                host.begin_undo_group(&label);
                 let mut moved = 0usize;
                 let mut refused = 0usize;
                 for entity in updates {
@@ -3824,7 +3827,7 @@ impl OcsmPlugin {
                 if moved > 0 {
                     host.set_dirty();
                 }
-                host.commit_undo();
+                host.end_undo_group();
 
                 if moved == 0 {
                     host.push_error(&format!(
@@ -6323,7 +6326,7 @@ mod tests {
         errors: Vec<String>,
         infos: Vec<String>,
         undo: Vec<String>,
-        doc: ocs_plugin_api::host::CadDocument,
+        doc: ocs_plugin_api::host::Document,
         path: Option<std::path::PathBuf>,
         // ensure_* 收到的 defs（自动初始化 vs 手动 OCSM 逐项对比用）。
         linetypes: Vec<ocs_plugin_api::host::LinetypeDef>,
@@ -6351,10 +6354,10 @@ mod tests {
         fn tab_index(&self) -> usize {
             0
         }
-        fn document(&self) -> &ocs_plugin_api::host::CadDocument {
+        fn document(&self) -> &ocs_plugin_api::host::Document {
             &self.doc
         }
-        fn document_mut(&mut self) -> &mut ocs_plugin_api::host::CadDocument {
+        fn document_mut(&mut self) -> &mut ocs_plugin_api::host::Document {
             &mut self.doc
         }
         fn add_entity(&mut self, _entity: ocs_plugin_api::host::EntityType) -> ocs_plugin_api::host::Handle {
@@ -6833,7 +6836,9 @@ mod tests {
                         .clone()
                         .map(|p| p.into_os_string()),
                 )),
-                R::DocumentSnapshot => Ok(P::Document(Box::new(self.doc.lock().unwrap().clone()))),
+                R::DocumentSnapshot => {
+                    Ok(P::Document(Box::new(self.doc.lock().unwrap().clone().into())))
+                }
                 R::PushInfo(msg) => {
                     self.reqs.lock().unwrap().push("push_info".into());
                     self.infos.lock().unwrap().push(msg);

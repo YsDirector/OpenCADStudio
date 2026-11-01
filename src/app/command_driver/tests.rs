@@ -124,6 +124,47 @@ mod trim_extend_history_tests {
     }
 
     #[test]
+    fn trim_command_dispatch_includes_fill_only_hatch_targets() {
+        use codec::entities::{BoundaryEdge, BoundaryPath, Hatch, PolylineEdge};
+        use codec::types::Vector2;
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let mut hatch = Hatch::new();
+        hatch.is_solid = true;
+        let mut path = BoundaryPath::new();
+        path.add_edge(BoundaryEdge::Polyline(PolylineEdge::new(
+            [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+                .into_iter()
+                .map(|p| Vector2::new(p[0], p[1]))
+                .collect(),
+            true,
+        )));
+        hatch.paths.push(path);
+        let i = app.active_tab;
+        let hatch_handle = app.tabs[i]
+            .scene
+            .add_entity(codec::EntityType::Hatch(Box::new(hatch)));
+        let boundary = add_line(&mut app, [5.0, -2.0], [5.0, 12.0]);
+        // Pick-first supplies a deterministic Standard-mode cutting edge,
+        // regardless of the global TRIMMODE setting from other tests.
+        app.tabs[i].scene.select_entity(boundary, false);
+        assert!(app.tabs[i]
+            .scene
+            .visible_hatch_handles_for_edit()
+            .contains(&hatch_handle));
+
+        // This exercises command dispatch, not just TrimCommand::new().
+        // A filled hatch does not appear in entity_wires(): previously the
+        // command snapshot omitted it, making every inside click a no-op.
+        let _ = app.dispatch_command("TRIM");
+        let cmd = app.tabs[i].active_cmd.as_mut().expect("TRIM command active");
+        assert_eq!(cmd.name(), "TRIM");
+        let result = cmd.on_entity_pick(hatch_handle, glam::DVec3::new(2.0, 5.0, 0.0));
+        assert!(matches!(result, CmdResult::ReplaceEntity(h, edited)
+            if h == hatch_handle && matches!(edited.first(), Some(codec::EntityType::Hatch(_)))));
+    }
+
+    #[test]
     fn trim_replacement_survives_undo_and_redo() {
         let mut app = OpenCADStudio::new_for_test();
         let _ = app.automation_op(r#"{"op":"new"}"#);
@@ -192,6 +233,24 @@ mod parametric_constraint_undo_tests {
             )))
     }
 
+    fn add_circle(app: &mut OpenCADStudio, cx: f64, cy: f64, radius: f64) -> Handle {
+        let mut circle = codec::entities::Circle::new();
+        circle.center = codec::types::Vector3::new(cx, cy, 0.0);
+        circle.radius = radius;
+        app.tabs[app.active_tab]
+            .scene
+            .add_entity(codec::EntityType::Circle(circle))
+    }
+
+    fn circle_center_radius(app: &OpenCADStudio, handle: Handle) -> ([f64; 2], f64) {
+        match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(codec::EntityType::Circle(circle)) => {
+                ([circle.center.x, circle.center.y], circle.radius)
+            }
+            other => panic!("expected a Circle, got {other:?}"),
+        }
+    }
+
     fn line_angle_deg(app: &OpenCADStudio, handle: Handle) -> f64 {
         match app.tabs[app.active_tab].scene.document.get_entity(handle) {
             Some(codec::EntityType::Line(l)) => (l.end.y - l.start.y)
@@ -199,6 +258,219 @@ mod parametric_constraint_undo_tests {
                 .to_degrees(),
             other => panic!("expected a Line, got {other:?}"),
         }
+    }
+
+    fn line_segment(app: &OpenCADStudio, handle: Handle) -> ([f64; 2], [f64; 2]) {
+        match app.tabs[app.active_tab].scene.document.get_entity(handle) {
+            Some(codec::EntityType::Line(l)) => ([l.start.x, l.start.y], [l.end.x, l.end.y]),
+            other => panic!("expected a Line, got {other:?}"),
+        }
+    }
+
+    fn assert_segment_unmoved(
+        app: &OpenCADStudio,
+        handle: Handle,
+        start: [f64; 2],
+        end: [f64; 2],
+    ) {
+        let (s, e) = line_segment(app, handle);
+        assert!(
+            (s[0] - start[0]).abs() < 1e-9
+                && (s[1] - start[1]).abs() < 1e-9
+                && (e[0] - end[0]).abs() < 1e-9
+                && (e[1] - end[1]).abs() < 1e-9,
+            "the first-picked entity should not move: {s:?} -> {e:?}"
+        );
+    }
+
+    /// A parallel constraint keeps the first-selected entity where it is and
+    /// turns the second to match it, the order its prompt names.
+    #[test]
+    fn parallel_constraint_holds_the_first_selected_entity() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let horizontal = add_line(&mut app, 0.0, 0.0, 100.0, 0.0);
+        let vertical = add_line(&mut app, 0.0, 0.0, 0.0, 100.0);
+        app.tabs[app.active_tab]
+            .scene
+            .document
+            .get_entity_mut(vertical)
+            .unwrap()
+            .common_mut()
+            .layer = "WALLS".to_string();
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Parallel,
+            refs: vec![
+                ParametricRef::whole(horizontal),
+                ParametricRef::whole(vertical),
+            ],
+            driving_param: None,
+            label: "Parallel constraint",
+        });
+        assert_segment_unmoved(&app, horizontal, [0.0, 0.0], [100.0, 0.0]);
+        assert_eq!(
+            app.tabs[app.active_tab]
+                .scene
+                .document
+                .get_entity(vertical)
+                .unwrap()
+                .common()
+                .layer,
+            "WALLS",
+            "turning the second entity must keep its layer"
+        );
+        let angle = line_angle_deg(&app, vertical);
+        assert!(
+            angle.abs() < 1e-6,
+            "the second entity should turn parallel to the first, got {angle} degrees"
+        );
+    }
+
+    #[test]
+    fn parallel_constraint_holds_whichever_entity_was_picked_first() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let vertical = add_line(&mut app, 0.0, 0.0, 0.0, 100.0);
+        let horizontal = add_line(&mut app, 0.0, 0.0, 100.0, 0.0);
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Parallel,
+            refs: vec![
+                ParametricRef::whole(vertical),
+                ParametricRef::whole(horizontal),
+            ],
+            driving_param: None,
+            label: "Parallel constraint",
+        });
+        assert_segment_unmoved(&app, vertical, [0.0, 0.0], [0.0, 100.0]);
+        let angle = line_angle_deg(&app, horizontal);
+        assert!(
+            (angle - 90.0).abs() < 1e-6,
+            "the second entity should turn parallel to the first, got {angle} degrees"
+        );
+    }
+
+    /// A line already parallel but running the opposite way is left alone:
+    /// the second entity takes the shorter turn, which is none at all.
+    #[test]
+    fn parallel_constraint_leaves_an_opposite_direction_pair_alone() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let datum = add_line(&mut app, 0.0, 0.0, 100.0, 0.0);
+        let reversed = add_line(&mut app, 0.0, 50.0, -100.0, 50.0);
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Parallel,
+            refs: vec![
+                ParametricRef::whole(datum),
+                ParametricRef::whole(reversed),
+            ],
+            driving_param: None,
+            label: "Parallel constraint",
+        });
+        assert_segment_unmoved(&app, datum, [0.0, 0.0], [100.0, 0.0]);
+        assert_segment_unmoved(&app, reversed, [0.0, 50.0], [-100.0, 50.0]);
+    }
+
+    /// The redraw journal must name the entity the ordered command turned.
+    #[test]
+    fn parallel_constraint_publishes_the_entity_it_turned() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let horizontal = add_line(&mut app, 0.0, 0.0, 100.0, 0.0);
+        let vertical = add_line(&mut app, 0.0, 0.0, 0.0, 100.0);
+        let epoch = app.tabs[app.active_tab].scene.geometry_epoch;
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Parallel,
+            refs: vec![
+                ParametricRef::whole(horizontal),
+                ParametricRef::whole(vertical),
+            ],
+            driving_param: None,
+            label: "Parallel constraint",
+        });
+        let delta = app.tabs[app.active_tab]
+            .scene
+            .replay_since(epoch)
+            .expect("the add publishes a replayable delta");
+        assert!(
+            delta
+                .iter()
+                .any(|&(handle, kind)| handle == vertical
+                    && kind == crate::scene::ChangeKind::Modified),
+            "the turned handle must be named in the delta: {delta:?}"
+        );
+    }
+
+    /// The turn the ordered command applies is part of the same undo step.
+    #[test]
+    fn undo_restores_the_second_entity_a_parallel_constraint_turned() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let horizontal = add_line(&mut app, 0.0, 0.0, 100.0, 0.0);
+        let vertical = add_line(&mut app, 0.0, 0.0, 0.0, 100.0);
+        let _ = app.apply_cmd_result(CmdResult::AddParametricConstraint {
+            kind: ConstraintKind::Parallel,
+            refs: vec![
+                ParametricRef::whole(horizontal),
+                ParametricRef::whole(vertical),
+            ],
+            driving_param: None,
+            label: "Parallel constraint",
+        });
+        let turned = line_segment(&app, vertical);
+        app.undo_steps(1);
+        assert_segment_unmoved(&app, vertical, [0.0, 0.0], [0.0, 100.0]);
+        app.redo_steps(1);
+        assert_eq!(line_segment(&app, vertical), turned);
+    }
+
+    /// A tangent constraint holds the first-picked circle and slides the
+    /// second-picked line straight onto it. A solve from scratch is free to
+    /// turn the line and drift it off the exact tangent.
+    #[test]
+    fn tangent_constraint_slides_the_second_line_onto_the_first_circle() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let circle = add_circle(&mut app, 0.0, 0.0, 20.0);
+        let line = add_line(&mut app, -100.0, 221.0, 100.0, 221.0);
+        let _ = app.apply_cmd_result(CmdResult::AddTangentConstraint {
+            first: ParametricRef::whole(circle),
+            second: ParametricRef::whole(line),
+            label: "Tangent constraint",
+        });
+        let (center, radius) = circle_center_radius(&app, circle);
+        assert!(
+            center[0].abs() < 1e-9 && center[1].abs() < 1e-9 && (radius - 20.0).abs() < 1e-9,
+            "the datum circle should not move: {center:?} r {radius}"
+        );
+        let (start, end) = line_segment(&app, line);
+        assert!(
+            (start[0] + 100.0).abs() < 1e-6
+                && (start[1] - 20.0).abs() < 1e-6
+                && (end[0] - 100.0).abs() < 1e-6
+                && (end[1] - 20.0).abs() < 1e-6,
+            "the line should keep its direction and slide down onto the circle: {start:?} -> {end:?}"
+        );
+    }
+
+    /// The pick order decides which entity gives way: a line picked first
+    /// stays put and the circle slides onto it.
+    #[test]
+    fn tangent_constraint_holds_the_first_line_and_moves_the_circle() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let line = add_line(&mut app, -100.0, 0.0, 100.0, 0.0);
+        let circle = add_circle(&mut app, 0.0, 50.0, 20.0);
+        let _ = app.apply_cmd_result(CmdResult::AddTangentConstraint {
+            first: ParametricRef::whole(line),
+            second: ParametricRef::whole(circle),
+            label: "Tangent constraint",
+        });
+        assert_segment_unmoved(&app, line, [-100.0, 0.0], [100.0, 0.0]);
+        let (center, radius) = circle_center_radius(&app, circle);
+        assert!(
+            center[0].abs() < 1e-9 && (center[1] - 20.0).abs() < 1e-9 && (radius - 20.0).abs() < 1e-9,
+            "the circle should slide onto the line along the normal: {center:?} r {radius}"
+        );
     }
 
     /// Constraint state and solved geometry share one undo/redo transaction.
@@ -1222,6 +1494,65 @@ mod dispatched_command_task_tests {
             "Relaunch dropped the dispatched command's task"
         );
     }
+
+    #[test]
+    fn test_dispatch_move_with_handle_enter_and_points() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+
+        let handle = app.tabs[i].scene.add_entity(codec::EntityType::Line(codec::entities::Line::from_points(
+            codec::types::Vector3::new(10.0, 20.0, 0.0),
+            codec::types::Vector3::new(30.0, 40.0, 0.0),
+        )));
+
+        // Unselected entity - AutoLISP (command "_MOVE" ss "" "_NONE" pt "_NONE" '(0 0 0)) produces:
+        assert!(app.tabs[i].scene.selected_entities().is_empty());
+        let cmd = format!("_MOVE {:X} ENTER _NONE 10,20,0 _NONE 0,0,0", handle.value());
+        let task = app.apply_cmd_result(CmdResult::Script(cmd));
+        let _ = app.drive_headless_task(task);
+
+        let moved = app.tabs[i].scene.document.get_entity(handle).unwrap();
+        if let codec::EntityType::Line(l) = moved {
+            assert!((l.start.x - 0.0).abs() < 1e-4, "Expected start.x == 0, got {}", l.start.x);
+            assert!((l.start.y - 0.0).abs() < 1e-4, "Expected start.y == 0, got {}", l.start.y);
+            assert!((l.end.x - 20.0).abs() < 1e-4, "Expected end.x == 20, got {}", l.end.x);
+            assert!((l.end.y - 20.0).abs() < 1e-4, "Expected end.y == 20, got {}", l.end.y);
+        } else {
+            panic!("Expected line entity");
+        }
+    }
+
+    #[test]
+    fn test_preselection_move_with_base_and_dest_points() {
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+
+        let handle = app.tabs[i].scene.add_entity(codec::EntityType::Line(codec::entities::Line::from_points(
+            codec::types::Vector3::new(10.0, 20.0, 0.0),
+            codec::types::Vector3::new(30.0, 40.0, 0.0),
+        )));
+
+        // User pre-selects the entity in the GUI
+        app.tabs[i].scene.select_entity(handle, true);
+        assert_eq!(app.tabs[i].scene.selected_entities().len(), 1);
+
+        // Pre-selection MOVE command only takes base and destination points
+        let cmd = "_MOVE _NONE 10,20,0 _NONE 0,0,0";
+        let task = app.apply_cmd_result(CmdResult::Script(cmd.to_string()));
+        let _ = app.drive_headless_task(task);
+
+        let moved = app.tabs[i].scene.document.get_entity(handle).unwrap();
+        if let codec::EntityType::Line(l) = moved {
+            assert!((l.start.x - 0.0).abs() < 1e-4, "Expected start.x == 0, got {}", l.start.x);
+            assert!((l.start.y - 0.0).abs() < 1e-4, "Expected start.y == 0, got {}", l.start.y);
+            assert!((l.end.x - 20.0).abs() < 1e-4, "Expected end.x == 20, got {}", l.end.x);
+            assert!((l.end.y - 20.0).abs() < 1e-4, "Expected end.y == 20, got {}", l.end.y);
+        } else {
+            panic!("Expected line entity");
+        }
+    }
 }
 
 /// PW-1 BEDIT characterization tests.
@@ -1665,6 +1996,97 @@ mod bedit_characterization_tests {
             "discard pushes no undo entry (not undoable)"
         );
     }
+
+    #[test]
+    fn test_locked_layer_selection_rejection() {
+        use crate::command::{CadCommand, CmdResult};
+
+        let mut app = OpenCADStudio::new_for_test();
+        let _ = app.automation_op(r#"{"op":"new"}"#);
+        let tab = app.active_tab;
+
+        // Create line1 on layer "0" (unlocked)
+        let h_unlocked = app.tabs[tab]
+            .scene
+            .add_entity(codec::EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::new(10.0, 0.0, 0.0),
+            )));
+
+        // Create line2 on layer "LOCKED_LAYER" and lock it
+        let mut line2 = Line::from_points(
+            Vector3::new(0.0, 10.0, 0.0),
+            Vector3::new(10.0, 10.0, 0.0),
+        );
+        line2.common.layer = "LOCKED_LAYER".to_string();
+        let h_locked = app.tabs[tab]
+            .scene
+            .add_entity(codec::EntityType::Line(line2));
+
+        app.tabs[tab]
+            .scene
+            .document
+            .layers
+            .get_mut("LOCKED_LAYER")
+            .expect("LOCKED_LAYER must exist")
+            .flags
+            .locked = true;
+
+        assert!(!app.tabs[tab].scene.is_layer_locked(h_unlocked));
+        assert!(app.tabs[tab].scene.is_layer_locked(h_locked));
+
+        struct MockCmd {
+            rejects: bool,
+        }
+
+        impl CadCommand for MockCmd {
+            fn name(&self) -> &'static str {
+                "MOCK_REJECT"
+            }
+            fn prompt(&self) -> String {
+                "Select objects: ".into()
+            }
+            fn on_point(&mut self, _pt: glam::DVec3) -> CmdResult {
+                CmdResult::Done
+            }
+            fn on_enter(&mut self) -> CmdResult {
+                CmdResult::Done
+            }
+            fn selection_rejects_locked_layers(&self) -> bool {
+                self.rejects
+            }
+        }
+
+        // Test 1: Command with rejects = true drops locked handles and reports count
+        app.tabs[tab].active_cmd = Some(Box::new(MockCmd { rejects: true }));
+
+        let mut handles = vec![h_unlocked, h_locked];
+        app.filter_handles_reject_locked(tab, &mut handles);
+        assert_eq!(handles, vec![h_unlocked]);
+        assert!(app
+            .command_line
+            .history
+            .last()
+            .unwrap()
+            .text
+            .contains("1 was on a locked layer."));
+
+        // Test 2: Command with rejects = false keeps all handles
+        app.tabs[tab].active_cmd = Some(Box::new(MockCmd { rejects: false }));
+
+        let mut handles2 = vec![h_unlocked, h_locked];
+        app.filter_handles_reject_locked(tab, &mut handles2);
+        assert_eq!(handles2, vec![h_unlocked, h_locked]);
+
+        // Test 3: filter_locked_layer_selection drops locked handles from SelectionComplete
+        app.tabs[tab].active_cmd = Some(Box::new(MockCmd { rejects: true }));
+        let input = StepInput::SelectionComplete(vec![h_unlocked, h_locked]);
+        let filtered = app.filter_locked_layer_selection(input);
+        match filtered {
+            StepInput::SelectionComplete(res) => assert_eq!(res, vec![h_unlocked]),
+            _ => panic!("Expected SelectionComplete"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1777,13 +2199,14 @@ mod block_base_point_tests {
                 vec!["DEF_BASE".to_string()],
                 Vec::new(),
                 0,
+                4,
             ),
         );
         assert_eq!(
             app.block_definition
                 .as_ref()
                 .map(|s| s.base_point_y.as_str()),
-            Some("0"),
+            Some("0.0000"),
             "a new block starts at 0"
         );
 
@@ -1897,6 +2320,50 @@ mod block_base_point_tests {
         );
     }
 
+    /// The definition body is replaced on save, so the terminator has to move
+    /// after the new body.
+    #[test]
+    fn a_refedit_save_ends_the_definition_after_its_body() {
+        let mut app = OpenCADStudio::new_for_test();
+        let handle = block_and_instance_with_base(&mut app, "REFEDIT_ORDER");
+        let i = app.active_tab;
+        let _ = app.dispatch_command(&format!("REFEDIT_BEGIN:{}", handle.value()));
+        assert!(
+            app.tabs[i].refedit_session.is_some(),
+            "setup: REFEDIT_BEGIN opens a session"
+        );
+        let _ = app.dispatch_command("REFCLOSE_SAVE");
+        assert!(app.tabs[i].refedit_session.is_none());
+        let record = app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .get("REFEDIT_ORDER")
+            .expect("the block record");
+        let marker = record.block_entity_handle.value();
+        let end = record.block_end_handle.value();
+        let body: Vec<_> = record
+            .entity_handles
+            .iter()
+            .map(|h| h.value())
+            .collect();
+        assert!(
+            body.iter().all(|h| *h > marker),
+            "body handles follow the BLOCK marker: {body:?}"
+        );
+        assert!(
+            end > *body.iter().max().expect("the body is not empty"),
+            "the ENDBLK handle follows the body: marker {marker}, body {body:?}, end {end}"
+        );
+        assert!(
+            matches!(
+                app.tabs[i].scene.document.get_entity(codec::Handle::new(end)),
+                Some(EntityType::BlockEnd(_))
+            ),
+            "the record's end handle names an ENDBLK entity"
+        );
+    }
+
     /// base-point follow-up fix: the dynamic-block visibility grip is a
     /// block-definition coordinate, so it follows the base-point convention
     /// too: (100,100) + Rot(30)*2*((12,3) - (10,5)) = (105.464102, 98.535898).
@@ -1939,5 +2406,89 @@ mod block_base_point_tests {
             app.tabs[i].visibility_grip.is_some(),
             "the selection is a dynamic-block reference"
         );
+    }
+
+    /// The visibility grip opens a list, so its triangle points down like a
+    /// list arrow, even on a rotated reference (the fixture turns it 30 deg).
+    #[test]
+    fn visibility_grip_points_down() {
+        let mut app = OpenCADStudio::new_for_test();
+        let handle = block_and_instance_with_base(&mut app, "VIS_DOWN");
+        let i = app.active_tab;
+        let def_block = app.tabs[i]
+            .scene
+            .document
+            .block_records
+            .get("VIS_DOWN")
+            .expect("the block record")
+            .handle;
+        let mut param = codec::objects::BlockVisibilityParameter::default();
+        param.owner = def_block;
+        param.def_point = Vector3::new(12.0, 3.0, 0.0);
+        app.tabs[i]
+            .scene
+            .document
+            .block_visibility_params
+            .insert(codec::Handle::new(0x70), param);
+        app.tabs[i].selected_handle = Some(handle);
+
+        app.refresh_visibility_grip([0.0, 0.0, 0.0]);
+
+        let grip = app.tabs[i]
+            .selected_grips
+            .last()
+            .expect("the visibility lookup grip");
+        assert_eq!(grip.dir, Some(glam::DVec3::NEG_Y));
+    }
+}
+
+#[cfg(test)]
+mod sweep_path_end_tests {
+    use crate::app::OpenCADStudio;
+    use crate::command::CmdResult;
+    use codec::entities::{LwPolyline, LwVertex};
+    use codec::types::Vector2;
+
+    /// Picked near its far end, a path is swept from that end. A path whose
+    /// start lies farther from the world origin than its end used to fail.
+    #[test]
+    fn sweep_from_the_picked_end_of_a_bent_path() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let mut hexagon = LwPolyline::new();
+        for k in 0..6 {
+            let a = (60.0 * k as f64).to_radians();
+            hexagon.vertices.push(LwVertex::new(Vector2::new(5.0 * a.cos(), 5.0 * a.sin())));
+        }
+        hexagon.is_closed = true;
+        let profile = app.tabs[i].scene.add_entity(codec::EntityType::LwPolyline(hexagon));
+        let mut path = LwPolyline::new();
+        path.vertices.push(LwVertex::new(Vector2::new(20.0, 0.0)));
+        path.vertices.push(LwVertex::with_bulge(
+            Vector2::new(60.0, 0.0),
+            22.5f64.to_radians().tan(),
+        ));
+        path.vertices.push(LwVertex::new(Vector2::new(80.0, 20.0)));
+        path.vertices.push(LwVertex::new(Vector2::new(80.0, 60.0)));
+        let path = app.tabs[i].scene.add_entity(codec::EntityType::LwPolyline(path));
+        let options = crate::command::SweepOptions {
+            path_pick: Some(glam::DVec3::new(80.0, 40.0, 0.0)),
+            ..crate::command::SweepOptions::default()
+        };
+        let _ = app.apply_cmd_result(CmdResult::SweepEntities {
+            handles: vec![profile],
+            path_handle: path,
+            mode: crate::command::ExtrudeMode::Solid,
+            options,
+            color: [1.0; 4],
+            expressions: [None, None],
+        });
+        let swept = app.tabs[i]
+            .scene
+            .document
+            .entities()
+            .any(|entity| matches!(entity, codec::EntityType::Solid3D(_)));
+        assert!(swept, "the sweep from the picked end makes a solid");
     }
 }

@@ -446,8 +446,9 @@ impl OpenCADStudio {
                     self.merge_clipboard_deps(i);
                     // Recreate any block definition the clipboard's INSERTs
                     // reference, so nested blocks inside the new wrapper block
-                    // don't render empty. (#135 / #158)
-                    self.merge_clipboard_blocks(i);
+                    // don't render empty (#135 / #158), and the multileader
+                    // styles the wrapped multileaders point at.
+                    let mleaders = self.merge_clipboard_blocks(i);
                     // Recreate each entity's xdictionary graph (XCLIP filters)
                     // and stamp the new root onto the wrapped entity, so the
                     // block's nested insert keeps its clip. (#xclip-paste)
@@ -455,6 +456,9 @@ impl OpenCADStudio {
                     let name = self.unique_block_name("Block");
                     let base = self.clipboard_base;
                     let mut entities = self.clipboard.clone();
+                    for entity in &mut entities {
+                        super::super::command_driver::clipboard::remap_mleader(entity, &mleaders);
+                    }
                     for (&idx, &root) in &ext_roots {
                         if let Some(e) = entities.get_mut(idx) {
                             e.common_mut().xdictionary_handle = Some(root);
@@ -518,11 +522,13 @@ impl OpenCADStudio {
                     .collect();
                 let existing_names = self.tabs[i].scene.custom_block_names();
                 let default_unit = self.tabs[i].scene.document.header.insertion_units;
+                let precision = self.tabs[i].scene.document.header.linear_unit_precision;
                 self.block_definition = Some(
                     crate::ui::window::block_definition::BlockDefinitionState::new(
                         existing_names,
                         handles,
                         default_unit,
+                        precision,
                     ),
                 );
                 self.active_modal = Some(crate::app::ModalKind::BlockDefinition);
@@ -536,9 +542,7 @@ impl OpenCADStudio {
                     .collect();
                 if parts.len() == 3 {
                     if let Some(state) = self.block_definition.as_mut() {
-                        state.base_point_x = format!("{:.4}", parts[0]);
-                        state.base_point_y = format!("{:.4}", parts[1]);
-                        state.base_point_z = format!("{:.4}", parts[2]);
+                        state.set_base_point(glam::DVec3::new(parts[0], parts[1], parts[2]));
                     }
                 }
                 self.tabs[i].active_cmd = None;
@@ -572,9 +576,7 @@ impl OpenCADStudio {
                     .collect();
                 if parts.len() == 3 {
                     if let Some(state) = self.wblock.as_mut() {
-                        state.base_point_x = format!("{:.4}", parts[0]);
-                        state.base_point_y = format!("{:.4}", parts[1]);
-                        state.base_point_z = format!("{:.4}", parts[2]);
+                        state.show_base_point(glam::DVec3::new(parts[0], parts[1], parts[2]));
                     }
                 }
                 self.tabs[i].active_cmd = None;
@@ -614,12 +616,23 @@ impl OpenCADStudio {
                 let blocks = self.tabs[i].scene.custom_block_names();
                 let ranked = self.ranked_block_names(&blocks);
                 let snapshot = self.block_usage_snapshot();
+                // The remembered name belongs to this drawing; offering one it
+                // does not define would leave Enter with nothing to answer.
+                let remembered = self.tabs[i].insname.clone();
+                let default_name = if blocks
+                    .iter()
+                    .any(|name| name.eq_ignore_ascii_case(&remembered))
+                {
+                    remembered
+                } else {
+                    String::new()
+                };
                 let cmd = InsertBlockCommand::classic(
                     ranked,
                     snapshot,
                     self.cliprompt_lines.clamp(0, 50) as u8,
                     self.block_catalog(),
-                    self.insname.clone(),
+                    default_name,
                 );
                 self.command_line.push_info(&cmd.prompt());
                 self.command_line.set_step_options(cmd.options());
@@ -894,6 +907,7 @@ impl OpenCADStudio {
                     .collect();
                 let existing_blocks = self.tabs[i].scene.custom_block_names();
                 let default_unit = self.tabs[i].scene.document.header.insertion_units;
+                let precision = self.tabs[i].scene.document.header.linear_unit_precision;
                 // "new block" in the drawing's folder, or in Documents for an
                 // unsaved drawing; the file type is added when it is written.
                 let folder = self.tabs[i]
@@ -910,6 +924,7 @@ impl OpenCADStudio {
                     handles,
                     default_unit,
                     default_path,
+                    precision,
                 ));
                 self.active_modal = Some(crate::app::ModalKind::WriteBlock);
             }
@@ -1790,6 +1805,77 @@ mod tests {
         );
     }
 
+    // The Write Block dialog prints coordinates the way the drawing prints
+    // them, and a picked point lands in the same field.
+    #[test]
+    fn write_block_dialog_prints_coordinates_at_the_drawing_precision() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+        app.tabs[i].scene.document.header.linear_unit_precision = 2;
+        let _ = app.run_command_line("WBLOCK");
+        let state = app.wblock.as_ref().expect("the dialog opens");
+        assert_eq!(state.base_point_x, "0.00", "bare zero at LUPREC 2");
+        let _ = app.dispatch_command("WBLOCK_POINT_PICKED 2.5 7.126 0");
+        let state = app.wblock.as_ref().expect("the dialog stays open");
+        assert_eq!(state.base_point_x, "2.50");
+        assert_eq!(state.base_point_y, "7.13");
+        assert_eq!(state.base_point_z, "0.00");
+    }
+
+    // The Block dialog prints its base point the same way the drawing does, and
+    // a point picked from the drawing lands in the same fields.
+    #[test]
+    fn block_dialog_prints_coordinates_at_the_drawing_precision() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+        app.tabs[i].scene.document.header.linear_unit_precision = 2;
+        app.tabs[i].scene.define_block_raw(
+            "PRE_BASE",
+            codec::Vector3::new(10.0, 5.0, 0.0),
+            vec![codec::EntityType::Line(codec::entities::Line::from_points(
+                codec::Vector3::new(10.0, 5.0, 0.0),
+                codec::Vector3::new(30.0, 5.0, 0.0),
+            ))],
+        );
+        let _ = app.run_command_line("BLOCK");
+        let state = app
+            .block_definition
+            .as_ref()
+            .expect("the dialog opens with the drawing's precision");
+        assert_eq!(state.base_point_x, "0.00", "bare zero at LUPREC 2");
+        let _ = app.dispatch_command("BLOCK_POINT_PICKED 2.5 7.126 0");
+        let state = app
+            .block_definition
+            .as_ref()
+            .expect("the dialog stays open");
+        assert_eq!(state.base_point_x, "2.50");
+        assert_eq!(state.base_point_y, "7.13");
+        assert_eq!(state.base_point_z, "0.00");
+        assert_eq!(
+            state.parse_base_point(),
+            glam::DVec3::new(2.5, 7.13, 0.0),
+            "the printed text reads back as the point it shows"
+        );
+
+        // Choosing an existing definition prefills from its base, printed the
+        // same way rather than at a fixed number of decimals.
+        let _ = app.update(crate::app::Message::BlockDefNameSelect(
+            "PRE_BASE".to_string(),
+        ));
+        let state = app
+            .block_definition
+            .as_ref()
+            .expect("the dialog stays open");
+        assert_eq!(state.base_point_x, "10.00");
+        assert_eq!(state.base_point_y, "5.00");
+        assert_eq!(state.base_point_z, "0.00");
+        assert_eq!(
+            state.parse_base_point(),
+            glam::DVec3::new(10.0, 5.0, 0.0),
+            "the prefilled base reads back exactly"
+        );
+    }
+
     /// Run one command line and return only the command-line text it appended.
     fn run_capture(app: &mut OpenCADStudio, cmd: &str) -> String {
         let start = app.command_line.history.len();
@@ -1799,6 +1885,91 @@ mod tests {
             .map(|e| e.text.as_str())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn define_line_block(app: &mut OpenCADStudio, tab: usize, name: &str) {
+        let mut line = codec::entities::Line::new();
+        line.start = codec::types::Vector3::ZERO;
+        line.end = codec::types::Vector3::new(10.0, 0.0, 0.0);
+        app.tabs[tab]
+            .scene
+            .define_block_from_owned_entities(
+                vec![codec::EntityType::Line(line)],
+                name,
+                glam::DVec3::ZERO,
+            )
+            .unwrap();
+    }
+
+    fn feed(app: &mut OpenCADStudio, text: &str) {
+        let _ = app.update(crate::app::Message::CommandInput(text.to_string()));
+        let _ = app.update(crate::app::Message::CommandSubmit);
+    }
+
+    // -INSERT remembers the last block used in *this* drawing, so the
+    // bracketed default is always one of the definitions it offers.
+    #[test]
+    fn insert_default_name_is_remembered_per_drawing() {
+        let mut app = fresh_app();
+        let first = app.active_tab;
+        define_line_block(&mut app, first, "ALPHA");
+        app.record_block_insert("ALPHA");
+        app.tabs
+            .push(crate::app::document::DocumentTab::new_drawing(2));
+        app.active_tab = 1;
+        define_line_block(&mut app, 1, "BETA");
+        app.record_block_insert("BETA");
+        app.tabs[1].active_cmd = None;
+
+        app.active_tab = first;
+        let out = run_capture(&mut app, "-INSERT");
+        assert!(out.contains("<ALPHA>"), "{out}");
+        assert!(!out.contains("<BETA>"), "{out}");
+        app.tabs[first].active_cmd = None;
+
+        app.active_tab = 1;
+        let out = run_capture(&mut app, "-INSERT");
+        assert!(out.contains("<BETA>"), "{out}");
+        assert!(!out.contains("<ALPHA>"), "{out}");
+    }
+
+    // A remembered name that no longer names a definition of the drawing is
+    // not offered as the default.
+    #[test]
+    fn insert_default_name_is_dropped_when_the_block_is_not_defined() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+        define_line_block(&mut app, i, "REAL");
+        let _ = app.run_command_line("INSNAME GHOST");
+        let out = run_capture(&mut app, "-INSERT");
+        assert!(out.contains("Enter block name or [?]:"), "{out}");
+        assert!(!out.contains("GHOST"), "{out}");
+    }
+
+    // `?` prints the definitions into the transcript and returns to the name
+    // prompt, so the operator can still pick one.
+    #[test]
+    fn insert_listing_prints_and_returns_to_the_name_prompt() {
+        let mut app = fresh_app();
+        let i = app.active_tab;
+        define_line_block(&mut app, i, "ALPHA");
+        let _ = app.run_command_line("-INSERT");
+        let start = app.command_line.history.len();
+        feed(&mut app, "?");
+        feed(&mut app, "*");
+        let out = app.command_line.history[start..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(out.contains("Defined blocks."), "{out}");
+        assert!(out.contains("\"ALPHA\""), "{out}");
+        let cmd = app.tabs[i]
+            .active_cmd
+            .as_ref()
+            .expect("-INSERT stays active after the listing");
+        assert_eq!(cmd.prompt(), "Enter block name or [?]:");
+        assert!(out.contains("Enter block name or [?]:"), "{out}");
     }
 
     // ATTMAN and BATTMAN open the Block Attribute Manager. A drawing without
@@ -1875,6 +2046,268 @@ mod tests {
             .unwrap();
         app.refresh_block_palette_if_stale();
         assert!(app.block_palette.blocks.iter().any(|b| b.name == "Widget"));
+    }
+
+    #[test]
+    fn blockpalette_click_on_a_drawing_block_keeps_the_previews() {
+        let mut app = fresh_app();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let mut line = codec::entities::Line::new();
+        line.end = codec::types::Vector3::new(10.0, 0.0, 0.0);
+        app.tabs[i]
+            .scene
+            .define_block_from_owned_entities(
+                vec![codec::EntityType::Line(line)],
+                "Widget",
+                glam::DVec3::ZERO,
+            )
+            .unwrap();
+        app.refresh_block_palette();
+        let before = std::rc::Rc::clone(&app.block_palette.blocks[0].preview);
+        let _ = app.palette_insert(
+            crate::ui::window::block_palette::Item::Current("Widget".into()),
+            None,
+        );
+        assert_eq!(app.block_palette.placing.as_deref(), Some("Widget"));
+        // No rebuild: the same preview (and its drawn thumbnail) stays.
+        assert!(std::rc::Rc::ptr_eq(
+            &app.block_palette.blocks[0].preview,
+            &before
+        ));
+    }
+
+    #[test]
+    fn blockpalette_refresh_keeps_previews_of_blocks_a_change_did_not_touch() {
+        use std::rc::Rc;
+        let mut app = fresh_app();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let line = |x: f64| {
+            let mut line = codec::entities::Line::new();
+            line.end = codec::types::Vector3::new(x, 0.0, 0.0);
+            codec::EntityType::Line(line)
+        };
+        let insert = |name: &str| {
+            codec::EntityType::Insert(codec::entities::Insert::new(
+                name.to_string(),
+                codec::types::Vector3::ZERO,
+            ))
+        };
+        let scene = &mut app.tabs[i].scene;
+        scene.define_block_raw("Part", codec::types::Vector3::ZERO, vec![line(1.0)]);
+        scene.define_block_raw("Holder", codec::types::Vector3::ZERO, vec![insert("Part")]);
+        scene.define_block_raw("Outer", codec::types::Vector3::ZERO, vec![insert("Holder")]);
+        scene.define_block_raw("Other", codec::types::Vector3::ZERO, vec![line(2.0)]);
+        app.refresh_block_palette();
+        let preview = |app: &crate::app::OpenCADStudio, name: &str| {
+            Rc::clone(&app.block_palette.current_entry(name).unwrap().preview)
+        };
+        // A preview is worked out once shown, and the one kept for Recent /
+        // Favorites is the same, not a copy.
+        let kept = |app: &crate::app::OpenCADStudio, name: &str| {
+            let key = format!("|{}", name.to_ascii_uppercase());
+            app.block_palette
+                .ref_wires
+                .iter()
+                .find(|(k, _)| k.ends_with(&key))
+                .map(|(_, p)| Rc::clone(p))
+                .expect("kept preview")
+        };
+        assert!(preview(&app, "Part").wires().is_none());
+        app.ensure_block_previews();
+        assert!(preview(&app, "Part").wires().is_some_and(|w| !w.is_empty()));
+        assert!(Rc::ptr_eq(&kept(&app, "Part"), &preview(&app, "Part")));
+        let before: Vec<_> = ["Part", "Holder", "Outer", "Other"]
+            .iter()
+            .map(|n| preview(&app, n))
+            .collect();
+        // Redefining Part redraws it and the blocks holding it, directly or
+        // nested; Other keeps its preview.
+        let fresh = !app.block_palette_stale();
+        app.tabs[i]
+            .scene
+            .redefine_block_raw("Part", codec::types::Vector3::ZERO, vec![line(5.0)])
+            .unwrap();
+        app.note_block_changes(fresh, ["Part"]);
+        app.refresh_block_palette();
+        let after: Vec<_> = ["Part", "Holder", "Outer", "Other"]
+            .iter()
+            .map(|n| preview(&app, n))
+            .collect();
+        for k in 0..3 {
+            assert!(!Rc::ptr_eq(&before[k], &after[k]), "{k}");
+        }
+        assert!(Rc::ptr_eq(&before[3], &after[3]));
+        assert!(Rc::ptr_eq(&kept(&app, "Part"), &after[0]));
+        // A change made while the palette was out of date rebuilds all.
+        app.note_block_changes(false, ["Part"]);
+        app.refresh_block_palette();
+        assert!(!Rc::ptr_eq(&preview(&app, "Other"), &after[3]));
+        // Without a hint every preview is rebuilt, as before.
+        let other = preview(&app, "Other");
+        app.refresh_block_palette();
+        assert!(!Rc::ptr_eq(&preview(&app, "Other"), &other));
+        // A hint only lives for the message that made it.
+        let fresh = !app.block_palette_stale();
+        app.note_block_changes(fresh, ["Part"]);
+        let _ = app.update(crate::app::Message::Dock(
+            crate::ui::dock::DockMsg::HoverExit,
+        ));
+        assert_eq!(
+            app.block_palette.change_hint,
+            crate::ui::window::block_palette::ChangeHint::Unknown
+        );
+    }
+
+    #[test]
+    fn blockpalette_works_out_only_the_previews_it_shows() {
+        use crate::ui::window::block_palette::{BlockPaletteMsg, ViewMode};
+        let mut app = fresh_app();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        for k in 0..300 {
+            let mut line = codec::entities::Line::new();
+            line.end = codec::types::Vector3::new(1.0 + k as f64, 0.0, 0.0);
+            app.tabs[i].scene.define_block_raw(
+                &format!("B{k:03}"),
+                codec::types::Vector3::ZERO,
+                vec![codec::EntityType::Line(line)],
+            );
+        }
+        app.show_block_palette = true;
+        app.block_palette.view = ViewMode::Large;
+        let built = |app: &crate::app::OpenCADStudio| {
+            app.block_palette
+                .blocks
+                .iter()
+                .filter(|b| b.preview.wires().is_some())
+                .map(|b| b.name.clone())
+                .collect::<Vec<_>>()
+        };
+        // Before the list reports its viewport: about a screenful.
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::Scrolled {
+                offset: 0.0,
+                height: 0.0,
+            },
+        ));
+        let first = built(&app);
+        assert!(first.contains(&"B000".to_string()));
+        assert!(first.len() < 100, "{}", first.len());
+        // Scrolled far down: those rows are worked out too, the rest not.
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::Scrolled {
+                offset: 5000.0,
+                height: 400.0,
+            },
+        ));
+        let now = built(&app);
+        assert!(now.len() > first.len() && now.len() < 150, "{}", now.len());
+        assert!(!now.contains(&"B299".to_string()));
+        // The List view shows no thumbnails and works out none.
+        app.refresh_block_palette();
+        app.block_palette.view = ViewMode::List;
+        let _ = app.update(crate::app::Message::BlockPalette(BlockPaletteMsg::Refresh));
+        assert!(built(&app).is_empty());
+        // Placing a block works out its preview for the drag.
+        let _ = app.palette_insert(
+            crate::ui::window::block_palette::Item::Current("B299".into()),
+            None,
+        );
+        assert_eq!(built(&app), vec!["B299".to_string()]);
+    }
+
+    #[test]
+    fn block_gallery_works_out_only_the_previews_it_shows() {
+        use crate::ui::window::block_palette::BlockPaletteMsg;
+        let gallery = crate::modules::insert::insert_block::GALLERY_ID.to_string();
+        let mut app = fresh_app();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let define = |app: &mut crate::app::OpenCADStudio, name: &str| {
+            app.tabs[i].scene.define_block_raw(
+                name,
+                codec::types::Vector3::ZERO,
+                vec![codec::EntityType::Line(codec::entities::Line::new())],
+            );
+        };
+        for k in 0..300 {
+            define(&mut app, &format!("B{k:03}"));
+        }
+        let built = |app: &crate::app::OpenCADStudio| {
+            app.block_palette
+                .blocks
+                .iter()
+                .filter(|b| b.preview.wires().is_some())
+                .map(|b| b.name.clone())
+                .collect::<Vec<_>>()
+        };
+        // Opening the gallery (with the palette hidden) works out its first
+        // rows only.
+        assert!(!app.show_block_palette);
+        let _ = app.update(crate::app::Message::ToggleRibbonDropdown(gallery.clone()));
+        let first = built(&app);
+        assert!(first.contains(&"B000".to_string()));
+        assert!(first.len() < 40, "{}", first.len());
+        // Scrolled down: those rows are worked out too, the rest not.
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::GalleryScrolled(2000.0),
+        ));
+        let now = built(&app);
+        assert!(now.len() > first.len() && now.len() < 80, "{}", now.len());
+        assert!(!now.contains(&"B299".to_string()));
+        // Opened again, it starts at the top.
+        let _ = app.update(crate::app::Message::ToggleRibbonDropdown(gallery.clone()));
+        let _ = app.update(crate::app::Message::ToggleRibbonDropdown(gallery));
+        assert_eq!(app.block_palette.gallery_offset, 0.0);
+        // A block defined while it is open replaces the previews, and the
+        // ones in view are worked out again.
+        define(&mut app, "ZNEW");
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::GalleryScrolled(0.0),
+        ));
+        assert!(app.block_palette.current_entry("ZNEW").is_some());
+        assert!(built(&app).contains(&"B000".to_string()));
+    }
+
+    #[test]
+    fn blockpalette_library_thumbnails_arrive_in_the_background() {
+        use crate::ui::window::block_palette::BlockPaletteMsg;
+        let dir = std::env::temp_dir().join(format!(
+            "ocs_palette_thumbs_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let drawing = dir.join("part.dwg");
+        std::fs::write(&drawing, b"not a drawing").unwrap();
+        let mut app = fresh_app();
+        app.automation_op(r#"{"op":"new"}"#);
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::LibrarySelect(dir.display().to_string()),
+        ));
+        // Listed at once, without its thumbnail: that is read in the
+        // background once the message is handled.
+        let entry = |app: &crate::app::OpenCADStudio| {
+            app.block_palette
+                .library_entries
+                .iter()
+                .find(|e| e.path == drawing)
+                .map(|e| e.thumb.is_some())
+        };
+        assert_eq!(entry(&app), Some(false));
+        assert!(app.block_palette.thumb_requests.is_empty());
+        // The read thumbnail lands on its entry.
+        let handle = iced::widget::image::Handle::from_rgba(1, 1, vec![0; 4]);
+        let _ = app.update(crate::app::Message::BlockPalette(
+            BlockPaletteMsg::Thumbnails(vec![(drawing.clone(), Some(handle))]),
+        ));
+        assert_eq!(entry(&app), Some(true));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -2079,7 +2512,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut host_doc = codec::CadDocument::new();
+        let mut host_doc = codec::Document::new();
         let mut inner = BlockRecord::new("INNER");
         inner.flags.is_xref = true;
         inner.xref_path = "inner.dwg".to_string();
@@ -2109,7 +2542,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut xref_doc = codec::CadDocument::new();
+        let mut xref_doc = codec::Document::new();
         xref_doc
             .layers
             .add(codec::tables::Layer::new("WALLS"))
@@ -2145,7 +2578,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut xref_doc = codec::CadDocument::new();
+        let mut xref_doc = codec::Document::new();
         let mut line = codec::entities::Line::new();
         line.common.plotstyle_flags = 0b11;
         line.common.plotstyle_handle = Some(xref_doc.allocate_handle());
@@ -2199,7 +2632,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut host_doc = codec::CadDocument::new();
+        let mut host_doc = codec::Document::new();
         let mut inner = BlockRecord::new("INNER");
         inner.flags.is_xref = true;
         inner.xref_path = "inner.dwg".to_string();
@@ -2383,7 +2816,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        let mut xref_doc = codec::CadDocument::new();
+        let mut xref_doc = codec::Document::new();
         xref_doc
             .layers
             .add(codec::tables::Layer::new("WALLS"))

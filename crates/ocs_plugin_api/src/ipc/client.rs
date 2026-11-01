@@ -7,7 +7,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use codec::xdata::ExtendedDataRecord;
-use codec::{CadDocument, EntityType, Handle};
+use codec::{Document, EntityType, Handle};
 use interprocess::local_socket::traits::Stream as StreamTrait;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 
@@ -16,7 +16,7 @@ use crate::ipc::protocol::{
     HostResponse, HostToPlugin, PluginRequest, PluginResponse, PluginToHost, RunnerHandshake,
 };
 use crate::ipc::transport::{recv, send};
-use crate::shm::{DocumentViewInfo, SharedDocumentReader, DocumentViewData};
+use crate::shm::{DocumentViewData, DocumentViewInfo, SharedDocumentReader};
 
 /// Shared registry of active interactive commands, keyed by host-assigned id.
 pub type InteractiveRegistry = Rc<RefCell<HashMap<u64, Box<dyn InteractiveCommand>>>>;
@@ -60,7 +60,10 @@ impl IpcClient {
         &self,
         req: PluginRequest,
     ) -> Result<PluginResponse, crate::ipc::transport::TransportError> {
-        send(&mut self.stream.borrow_mut(), &PluginToHost::Request(Box::new(req)))?;
+        send(
+            &mut self.stream.borrow_mut(),
+            &PluginToHost::Request(Box::new(req)),
+        )?;
         loop {
             match recv::<HostToPlugin>(&mut self.stream.borrow_mut())? {
                 HostToPlugin::Response(resp) => return Ok(*resp),
@@ -80,7 +83,7 @@ impl IpcClient {
 pub struct PluginHostApi {
     client: IpcClient,
     tab_index: usize,
-    document_cache: OnceCell<CadDocument>,
+    document_cache: OnceCell<Document>,
     interactive: InteractiveRegistry,
     next_command_id: Cell<u64>,
     /// Cache XDATA records so repeated reads for the same (handle, app) return
@@ -105,16 +108,16 @@ impl PluginHostApi {
         }
     }
 
-    fn fetch_document(&self) -> CadDocument {
+    fn fetch_document(&self) -> Document {
         match self.client.request(PluginRequest::DocumentSnapshot) {
             Ok(PluginResponse::Document(doc)) => *doc,
             Ok(other) => {
                 eprintln!("[plugin] unexpected DocumentSnapshot response: {other:?}");
-                CadDocument::default()
+                Document::default()
             }
             Err(e) => {
                 eprintln!("[plugin] failed to fetch document snapshot: {e}");
-                CadDocument::default()
+                Document::default()
             }
         }
     }
@@ -125,11 +128,11 @@ impl HostApi for PluginHostApi {
         self.tab_index
     }
 
-    fn document(&self) -> &CadDocument {
+    fn document(&self) -> &Document {
         self.document_cache.get_or_init(|| self.fetch_document())
     }
 
-    fn document_mut(&mut self) -> &mut CadDocument {
+    fn document_mut(&mut self) -> &mut Document {
         if self.document_cache.get().is_none() {
             let doc = self.fetch_document();
             let _ = self.document_cache.set(doc);
@@ -304,17 +307,27 @@ impl HostApi for PluginHostApi {
         }
     }
 
-    fn begin_undo(&mut self, label: &str) {
-        if let Err(e) = self.client.request(PluginRequest::BeginUndo {
+    fn begin_undo_group(&mut self, label: &str) {
+        if let Err(e) = self.client.request(PluginRequest::BeginUndoGroup {
             label: label.to_string(),
         }) {
-            eprintln!("[plugin] begin_undo failed: {e}");
+            eprintln!("[plugin] begin_undo_group failed: {e}");
         }
     }
 
-    fn commit_undo(&mut self) {
-        if let Err(e) = self.client.request(PluginRequest::CommitUndo) {
-            eprintln!("[plugin] commit_undo failed: {e}");
+    fn end_undo_group(&mut self) {
+        if let Err(e) = self.client.request(PluginRequest::EndUndoGroup) {
+            eprintln!("[plugin] end_undo_group failed: {e}");
+        }
+    }
+
+    fn query_entities(&mut self, query: &str) -> Result<crate::host::EntityPage, String> {
+        match self.client.request(PluginRequest::QueryEntities {
+            query: query.to_string(),
+        }) {
+            Ok(PluginResponse::EntityPage(page)) => page,
+            Ok(other) => Err(format!("unexpected QueryEntities response: {other:?}")),
+            Err(e) => Err(format!("QueryEntities failed: {e}")),
         }
     }
 
@@ -403,131 +416,19 @@ impl HostApi for PluginHostApi {
             }
         }
         match self.doc_view.borrow().as_ref() {
-            Some(info) => match SharedDocumentReader::<DocumentViewData>::open(Path::new(&info.path)) {
-                Ok(reader) => Box::new(reader),
-                Err(e) => {
-                    eprintln!(
-                        "[plugin] failed to open document view at {}: {e}",
-                        info.path
-                    );
-                    Box::new(EmptyDocumentReader)
+            Some(info) => {
+                match SharedDocumentReader::<DocumentViewData>::open(Path::new(&info.path)) {
+                    Ok(reader) => Box::new(reader),
+                    Err(e) => {
+                        eprintln!(
+                            "[plugin] failed to open document view at {}: {e}",
+                            info.path
+                        );
+                        Box::new(EmptyDocumentReader)
+                    }
                 }
-            },
+            }
             None => Box::new(EmptyDocumentReader),
-        }
-    }
-
-    // ── API v5 (OCSMechanical) ──────────────────────────────────────────────
-    fn selected_handles(&self) -> Vec<Handle> {
-        match self.client.request(PluginRequest::SelectedHandles) {
-            Ok(PluginResponse::Handles(handles)) => handles,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected SelectedHandles response: {other:?}");
-                Vec::new()
-            }
-            Err(e) => {
-                eprintln!("[plugin] SelectedHandles failed: {e}");
-                Vec::new()
-            }
-        }
-    }
-
-    fn set_current_layer(&mut self, name: &str) -> bool {
-        match self.client.request(PluginRequest::SetCurrentLayer(name.to_string())) {
-            Ok(PluginResponse::Bool(b)) => b,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected SetCurrentLayer response: {other:?}");
-                false
-            }
-            Err(e) => {
-                eprintln!("[plugin] SetCurrentLayer failed: {e}");
-                false
-            }
-        }
-    }
-
-    fn ensure_layers(&mut self, defs: Vec<crate::host::LayerDef>) -> usize {
-        match self.client.request(PluginRequest::EnsureLayers(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureLayers response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureLayers failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn ensure_linetypes(&mut self, defs: Vec<crate::host::LinetypeDef>) -> usize {
-        match self.client.request(PluginRequest::EnsureLinetypes(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureLinetypes response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureLinetypes failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn ensure_text_styles(&mut self, defs: Vec<crate::host::TextStyleDef>) -> usize {
-        match self.client.request(PluginRequest::EnsureTextStyles(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
-            Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureTextStyles response: {other:?}");
-                0
-            }
-            Err(e) => {
-                eprintln!("[plugin] EnsureTextStyles failed: {e}");
-                0
-            }
-        }
-    }
-
-    fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
-        match self.client.request(PluginRequest::ShowFramePicker(frames)) {
-            Ok(PluginResponse::Bool(b)) => b,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected ShowFramePicker response: {other:?}");
-                false
-            }
-            Err(e) => {
-                eprintln!("[plugin] ShowFramePicker failed: {e}");
-                false
-            }
-        }
-    }
-
-    fn take_pending_frame_selection(&mut self) -> Option<crate::host::FrameSelection> {
-        match self.client.request(PluginRequest::TakePendingFrameSelection) {
-            Ok(PluginResponse::FrameSelection(sel)) => sel,
-            Ok(other) => {
-                eprintln!("[plugin] unexpected TakePendingFrameSelection response: {other:?}");
-                None
-            }
-            Err(e) => {
-                eprintln!("[plugin] TakePendingFrameSelection failed: {e}");
-                None
-            }
         }
     }
 
@@ -547,7 +448,9 @@ impl HostApi for PluginHostApi {
     }
 
     fn system_variable(&self, name: &str) -> Option<HostSettingValue> {
-        match self.client.request(PluginRequest::GetSystemVariable { name: name.to_owned() }) {
+        match self.client.request(PluginRequest::GetSystemVariable {
+            name: name.to_owned(),
+        }) {
             Ok(PluginResponse::SystemVariable(value)) => value,
             _ => None,
         }
@@ -579,11 +482,16 @@ impl HostApi for PluginHostApi {
         label: &str,
         entities: Vec<EntityType>,
     ) -> Result<(), String> {
-        match self.client.request(PluginRequest::UpdateEntitiesTransaction {
-            label: label.to_owned(), entities,
-        }) {
+        match self
+            .client
+            .request(PluginRequest::UpdateEntitiesTransaction {
+                label: label.to_owned(),
+                entities,
+            }) {
             Ok(PluginResponse::EntityTransactionResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -599,10 +507,18 @@ impl HostApi for PluginHostApi {
         }
     }
 
-    fn solid_operation(&mut self, operation: crate::host::SolidOperation) -> Result<Handle, String> {
-        match self.client.request(PluginRequest::SolidOperation { operation }) {
+    fn solid_operation(
+        &mut self,
+        operation: crate::host::SolidOperation,
+    ) -> Result<Handle, String> {
+        match self
+            .client
+            .request(PluginRequest::SolidOperation { operation })
+        {
             Ok(PluginResponse::SolidResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -611,7 +527,10 @@ impl HostApi for PluginHostApi {
         }
     }
 
-    fn run_command(&mut self, request: crate::host::CommandRequest) -> Result<crate::host::CommandOutcome, String> {
+    fn run_command(
+        &mut self,
+        request: crate::host::CommandRequest,
+    ) -> Result<crate::host::CommandOutcome, String> {
         match self.client.request(PluginRequest::RunCommand { request }) {
             Ok(PluginResponse::CommandResult(result)) => {
                 self.document_cache = OnceCell::new();
@@ -623,10 +542,18 @@ impl HostApi for PluginHostApi {
         }
     }
 
-    fn table_operation(&mut self, operation: crate::host::TableOperation) -> Result<Handle, String> {
-        match self.client.request(PluginRequest::TableOperation { operation }) {
+    fn table_operation(
+        &mut self,
+        operation: crate::host::TableOperation,
+    ) -> Result<Handle, String> {
+        match self
+            .client
+            .request(PluginRequest::TableOperation { operation })
+        {
             Ok(PluginResponse::TableResult(result)) => {
-                if result.is_ok() { self.document_cache = OnceCell::new(); }
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
                 result
             }
             Ok(PluginResponse::Error(error)) => Err(error),
@@ -636,7 +563,9 @@ impl HostApi for PluginHostApi {
     }
 
     fn set_selection(&mut self, handles: &[Handle]) -> Result<(), String> {
-        match self.client.request(PluginRequest::SetSelection { handles: handles.to_vec() }) {
+        match self.client.request(PluginRequest::SetSelection {
+            handles: handles.to_vec(),
+        }) {
             Ok(PluginResponse::SelectionResult(result)) => result,
             Ok(PluginResponse::Error(error)) => Err(error),
             Ok(other) => Err(format!("unexpected selection response: {other:?}")),
@@ -683,7 +612,10 @@ impl HostApi for PluginHostApi {
     }
 
     fn execute_command(&mut self, cmd: &str) -> bool {
-        match self.client.request(PluginRequest::ExecuteCommand(cmd.to_string())) {
+        match self
+            .client
+            .request(PluginRequest::ExecuteCommand(cmd.to_string()))
+        {
             Ok(PluginResponse::Bool(b)) => b,
             Ok(other) => {
                 eprintln!("[plugin] unexpected ExecuteCommand response: {other:?}");
@@ -767,12 +699,7 @@ impl HostApi for PluginHostApi {
             dictionary_path: dictionary_path.iter().map(|s| s.to_string()).collect(),
             name: name.to_string(),
         }) {
-            Ok(PluginResponse::XRecordDeleteResult(result)) => {
-                if result.is_ok() {
-                    self.document_cache = OnceCell::new();
-                }
-                result
-            }
+            Ok(PluginResponse::XRecordDeleteResult(result)) => result,
             Ok(PluginResponse::Error(error)) => Err(error),
             Ok(other) => Err(format!("unexpected XRecord delete response: {other:?}")),
             Err(error) => Err(error.to_string()),
@@ -807,6 +734,173 @@ impl HostApi for PluginHostApi {
         }
     }
 
+    fn stage_parametric_chain(
+        &mut self,
+        reference_name: &str,
+        chain: &crate::host::ParametricChain,
+        tolerance: f64,
+    ) -> Result<Vec<Handle>, String> {
+        // API v14: declared chain in, reference-only display handles out.
+        // A staged write mutates the document: the cached snapshot invalidates
+        // like every write path.
+        match self.client.request(PluginRequest::StageParametricChain {
+            reference_name: reference_name.to_string(),
+            chain: chain.clone(),
+            tolerance,
+        }) {
+            Ok(PluginResponse::StageParametricChainResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected parametric staging response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn sample_parametric(
+        &self,
+        chain: &crate::host::ParametricChain,
+        s: f64,
+    ) -> Result<Option<crate::host::ParametricSample>, String> {
+        // API v14: pure evaluation, no write, no cache effect.
+        match self.client.request(PluginRequest::SampleParametric {
+            chain: chain.clone(),
+            s,
+        }) {
+            Ok(PluginResponse::SampleParametricResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected parametric sample response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn register_plugin_class(
+        &mut self,
+        _plugin_id: &str,
+        class: &crate::host::PluginClassDeclaration,
+    ) -> Result<(), String> {
+        // API v14: declared class in; session registry state (no document
+        // mutation, no cache effect).
+        match self.client.request(PluginRequest::RegisterPluginClass {
+            class: class.clone(),
+        }) {
+            Ok(PluginResponse::RegisterPluginClassResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected class registration response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn stage_plugin_class_instance(
+        &mut self,
+        _plugin_id: &str,
+        instance: &crate::host::PluginClassInstance,
+    ) -> Result<Vec<Handle>, String> {
+        // API v14: identity + design descriptor in, reference-only display
+        // handles out. A staged write mutates the document: the cached
+        // snapshot invalidates like every write path.
+        match self.client.request(PluginRequest::StagePluginClassInstance {
+            instance: instance.clone(),
+        }) {
+            Ok(PluginResponse::StagePluginClassInstanceResult(result)) => {
+                if result.is_ok() {
+                    self.document_cache = OnceCell::new();
+                }
+                result
+            }
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!("unexpected instance staging response: {other:?}")),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn plugin_class_instance_properties(
+        &self,
+        handle: Handle,
+    ) -> Result<Vec<crate::host::PluginClassParameterRow>, String> {
+        // API v14: a pure read (the record row stays the values' truth):
+        // no document mutation, no cache effect.
+        match self
+            .client
+            .request(PluginRequest::PluginClassInstanceProperties { handle })
+        {
+            Ok(PluginResponse::PluginClassInstancePropertiesResult(result)) => result,
+            Ok(PluginResponse::Error(error)) => Err(error),
+            Ok(other) => Err(format!(
+                "unexpected class instance properties response: {other:?}"
+            )),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn show_dialog(&mut self, dialog: crate::dialog::DialogDef) -> crate::dialog::DialogResponse {
+        match self.client.request(PluginRequest::ShowDialog(dialog)) {
+            Ok(PluginResponse::DialogResult(res)) => res,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ShowDialog response: {other:?}");
+                crate::dialog::DialogResponse::Cancelled
+            }
+            Err(e) => {
+                eprintln!("[plugin] ShowDialog request failed: {e}");
+                crate::dialog::DialogResponse::Cancelled
+            }
+        }
+    }
+
+    fn register_panel(&mut self, panel: crate::dialog::PanelDef) -> bool {
+        match self.client.request(PluginRequest::RegisterPanel(panel)) {
+            Ok(PluginResponse::PanelRegistered(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected RegisterPanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] RegisterPanel request failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn update_panel(
+        &mut self,
+        panel_id: &str,
+        values: std::collections::HashMap<String, crate::dialog::DialogValue>,
+    ) -> bool {
+        match self.client.request(PluginRequest::UpdatePanel {
+            panel_id: panel_id.to_string(),
+            values,
+        }) {
+            Ok(PluginResponse::PanelUpdated(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected UpdatePanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] UpdatePanel request failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn toggle_panel(&mut self, panel_id: &str, show: Option<bool>) -> bool {
+        match self.client.request(PluginRequest::TogglePanel {
+            panel_id: panel_id.to_string(),
+            show,
+        }) {
+            Ok(PluginResponse::PanelToggled(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected TogglePanel response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] TogglePanel request failed: {e}");
+                false
+            }
+        }
+    }
     // ── fork: OCSMechanical additions follow the upstream v13 methods. ──
     fn add_block_record(
         &mut self,
@@ -824,6 +918,82 @@ impl HostApi for PluginHostApi {
             Ok(PluginResponse::Error(error)) => Err(error),
             Ok(other) => Err(format!("unexpected AddBlockRecord response: {other:?}")),
             Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn ensure_dim_styles(&mut self, defs: Vec<crate::host::DimStyleDef>) -> usize {
+        match self.client.request(PluginRequest::EnsureDimStyles(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureDimStyles response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureDimStyles failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_layers(&mut self, defs: Vec<crate::host::LayerDef>) -> usize {
+        match self.client.request(PluginRequest::EnsureLayers(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLayers response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLayers failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_linetypes(&mut self, defs: Vec<crate::host::LinetypeDef>) -> usize {
+        match self.client.request(PluginRequest::EnsureLinetypes(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureLinetypes response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureLinetypes failed: {e}");
+                0
+            }
+        }
+    }
+
+    fn ensure_text_styles(&mut self, defs: Vec<crate::host::TextStyleDef>) -> usize {
+        match self.client.request(PluginRequest::EnsureTextStyles(defs)) {
+            Ok(PluginResponse::Count(n)) => {
+                if n > 0 {
+                    self.document_cache = OnceCell::new();
+                }
+                n
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected EnsureTextStyles response: {other:?}");
+                0
+            }
+            Err(e) => {
+                eprintln!("[plugin] EnsureTextStyles failed: {e}");
+                0
+            }
         }
     }
 
@@ -852,24 +1022,63 @@ impl HostApi for PluginHostApi {
         }
     }
 
-    fn ensure_dim_styles(&mut self, defs: Vec<crate::host::DimStyleDef>) -> usize {
-        match self.client.request(PluginRequest::EnsureDimStyles(defs)) {
-            Ok(PluginResponse::Count(n)) => {
-                if n > 0 {
-                    self.document_cache = OnceCell::new();
-                }
-                n
-            }
+    // ── API v5 (OCSMechanical) ──────────────────────────────────────────────
+    fn selected_handles(&self) -> Vec<Handle> {
+        match self.client.request(PluginRequest::SelectedHandles) {
+            Ok(PluginResponse::Handles(handles)) => handles,
             Ok(other) => {
-                eprintln!("[plugin] unexpected EnsureDimStyles response: {other:?}");
-                0
+                eprintln!("[plugin] unexpected SelectedHandles response: {other:?}");
+                Vec::new()
             }
             Err(e) => {
-                eprintln!("[plugin] EnsureDimStyles failed: {e}");
-                0
+                eprintln!("[plugin] SelectedHandles failed: {e}");
+                Vec::new()
             }
         }
     }
+
+    fn set_current_layer(&mut self, name: &str) -> bool {
+        match self.client.request(PluginRequest::SetCurrentLayer(name.to_string())) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected SetCurrentLayer response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] SetCurrentLayer failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn show_frame_picker(&mut self, frames: Vec<crate::host::FrameItem>) -> bool {
+        match self.client.request(PluginRequest::ShowFramePicker(frames)) {
+            Ok(PluginResponse::Bool(b)) => b,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected ShowFramePicker response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] ShowFramePicker failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn take_pending_frame_selection(&mut self) -> Option<crate::host::FrameSelection> {
+        match self.client.request(PluginRequest::TakePendingFrameSelection) {
+            Ok(PluginResponse::FrameSelection(sel)) => sel,
+            Ok(other) => {
+                eprintln!("[plugin] unexpected TakePendingFrameSelection response: {other:?}");
+                None
+            }
+            Err(e) => {
+                eprintln!("[plugin] TakePendingFrameSelection failed: {e}");
+                None
+            }
+        }
+    }
+
 }
 
 /// Sentinel reader used when the shared-memory view could not be initialized.
@@ -965,7 +1174,11 @@ mod tests {
                 },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Ok))).unwrap();
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::Ok)),
+            )
+            .unwrap();
         });
         api.push_info("hello host");
         peer_handle.join().unwrap();
@@ -1022,7 +1235,10 @@ mod tests {
             EntityType::Point(Point::new()),
         ]);
         peer_handle.join().unwrap();
-        assert_eq!(handles, vec![Handle::new(10), Handle::new(11), Handle::new(12)]);
+        assert_eq!(
+            handles,
+            vec![Handle::new(10), Handle::new(11), Handle::new(12)]
+        );
     }
 
     #[test]
@@ -1037,7 +1253,11 @@ mod tests {
                 },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Bool(true)))).unwrap();
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::Bool(true))),
+            )
+            .unwrap();
         });
         assert!(api.update_entity(EntityType::Point(Point::new())));
         peer_handle.join().unwrap();
@@ -1057,9 +1277,78 @@ mod tests {
                 },
                 other => panic!("unexpected: {other:?}"),
             }
-            send(&mut peer, &HostToPlugin::Response(Box::new(PluginResponse::Bool(true)))).unwrap();
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::Bool(true))),
+            )
+            .unwrap();
         });
         assert!(api.remove_entity(Handle::new(7)));
         peer_handle.join().unwrap();
     }
+
+    #[test]
+    fn xrecord_requests_await_their_typed_responses() {
+        let (mut api, mut peer) = make_client();
+        let peer_handle = thread::spawn(move || {
+            let msg = recv::<PluginToHost>(&mut peer).unwrap();
+            match msg {
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::CreateXRecord {
+                        dictionary_path,
+                        name,
+                        entries,
+                    } => {
+                        assert_eq!(dictionary_path, vec!["CVIFC".to_owned()]);
+                        assert_eq!(name, "alpha");
+                        assert_eq!(
+                            entries,
+                            vec![crate::host::XRecordEntry::string(1, "{\"k\":\"road\"}")]
+                        );
+                    }
+                    other => panic!("unexpected: {other:?}"),
+                },
+                other => panic!("unexpected: {other:?}"),
+            }
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::XRecordCreateResult(Ok(
+                    Handle::new(21),
+                )))),
+            )
+            .unwrap();
+            let msg = recv::<PluginToHost>(&mut peer).unwrap();
+            match msg {
+                PluginToHost::Request(req) => match *req {
+                    PluginRequest::ListXRecords { dictionary_path } => {
+                        assert_eq!(dictionary_path, vec!["CVIFC".to_owned()]);
+                    }
+                    other => panic!("unexpected: {other:?}"),
+                },
+                other => panic!("unexpected: {other:?}"),
+            }
+            send(
+                &mut peer,
+                &HostToPlugin::Response(Box::new(PluginResponse::XRecordNames(Ok(vec![
+                    "alpha".to_owned()
+                ])))),
+            )
+            .unwrap();
+        });
+        assert_eq!(
+            api.create_xrecord(
+                &["CVIFC"],
+                "alpha",
+                vec![crate::host::XRecordEntry::string(1, "{\"k\":\"road\"}")]
+            )
+            .unwrap(),
+            Handle::new(21)
+        );
+        assert_eq!(
+            api.list_xrecords(&["CVIFC"]).unwrap(),
+            vec!["alpha".to_owned()]
+        );
+        peer_handle.join().unwrap();
+    }
+
 }

@@ -46,6 +46,9 @@ pub struct SelectObjectsCommand {
     keep: Option<fn(&codec::EntityType) -> bool>,
     /// A SEttings keyword at the prompt, and what it does.
     settings: Option<fn() -> CmdResult>,
+    /// A command's own keyword at the prompt (its label, the keyword and
+    /// what it does).
+    keyword: Option<(&'static str, &'static str, fn() -> CmdResult)>,
 }
 
 impl SelectObjectsCommand {
@@ -64,6 +67,7 @@ impl SelectObjectsCommand {
             associative_dimensions_only: false,
             keep: None,
             settings: None,
+            keyword: None,
         }
     }
 
@@ -83,6 +87,7 @@ impl SelectObjectsCommand {
             associative_dimensions_only: false,
             keep: None,
             settings: None,
+            keyword: None,
         }
     }
 
@@ -102,6 +107,7 @@ impl SelectObjectsCommand {
             associative_dimensions_only: false,
             keep: None,
             settings: None,
+            keyword: None,
         }
     }
 
@@ -121,6 +127,7 @@ impl SelectObjectsCommand {
             associative_dimensions_only: false,
             keep: None,
             settings: None,
+            keyword: None,
         }
     }
 
@@ -153,6 +160,21 @@ impl SelectObjectsCommand {
     ) -> Self {
         let mut command = Self::with_prompt(prompt_cmd, pending_cmd, prompt_text);
         command.keep = Some(keep);
+        command
+    }
+
+    /// The command's own wording with one keyword of its own (`label`, typed
+    /// as `keyword` or its capitals).
+    pub fn with_keyword(
+        prompt_cmd: &str,
+        pending_cmd: &str,
+        prompt_text: &'static str,
+        label: &'static str,
+        keyword: &'static str,
+        action: fn() -> CmdResult,
+    ) -> Self {
+        let mut command = Self::with_prompt(prompt_cmd, pending_cmd, prompt_text);
+        command.keyword = Some((label, keyword, action));
         command
     }
 
@@ -241,6 +263,10 @@ impl CadCommand for SelectObjectsCommand {
         self.pick.is_none()
     }
 
+    fn entity_pick_highlights_hover(&self) -> bool {
+        self.pick.is_none()
+    }
+
     fn selection_keeps_associative_dimensions(&self) -> bool {
         self.associative_dimensions_only
     }
@@ -266,7 +292,10 @@ impl CadCommand for SelectObjectsCommand {
     // the on-screen keyboard-less case needs.
     fn options(&self) -> Vec<CmdOption> {
         if self.settings.is_some() && self.pick.is_none() {
-            return vec![CmdOption::new("SEttings", "SE")];
+            return vec![CmdOption::new(t!("Settings").as_ref(), "SE")];
+        }
+        if let (Some((label, keyword, _)), None) = (self.keyword, self.pick.as_ref()) {
+            return vec![CmdOption::new(label, keyword)];
         }
         if self.commit_on_enter && self.show_options {
             if self.auto_constrain_settings {
@@ -304,6 +333,20 @@ impl CadCommand for SelectObjectsCommand {
         CmdResult::Relaunch(std::mem::take(&mut self.pending_cmd), handles)
     }
 
+    fn on_entity_pick(&mut self, handle: Handle, _pt: DVec3) -> CmdResult {
+        if handle.is_null() {
+            return CmdResult::NeedPoint;
+        }
+        if self.commit_on_enter {
+            if !self.handles.contains(&handle) {
+                self.handles.push(handle);
+            }
+            CmdResult::NeedPoint
+        } else {
+            CmdResult::Relaunch(std::mem::take(&mut self.pending_cmd), vec![handle])
+        }
+    }
+
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if let Some(pick) = self.pick.as_mut() {
             pick.push([pt.x, pt.y]);
@@ -327,6 +370,12 @@ impl CadCommand for SelectObjectsCommand {
         if let Some(settings) = self.settings {
             if word.len() >= 2 && "SETTINGS".starts_with(word.as_str()) {
                 return Some(settings());
+            }
+        }
+        if let Some((label, keyword, action)) = self.keyword {
+            let capitals: String = label.chars().filter(char::is_ascii_uppercase).collect();
+            if word == keyword || word == capitals || word == label.to_ascii_uppercase() {
+                return Some(action());
             }
         }
         match text.trim().to_uppercase().as_str() {
@@ -406,6 +455,9 @@ inventory::submit!(crate::command::CommandRegistration {
         "COPY",
         "COPYCLIP",
         "CUTCLIP",
+        "DCDISPLAY",
+        "DIMDISASSOCIATE",
+        "DIMREASSOCIATE",
         "ERASE",
         "EXPLODE",
         "GROUP",
@@ -423,3 +475,59 @@ inventory::submit!(crate::command::CommandRegistration {
         "TXTEXP"
     ]
 }); // SelectObjectsCommand
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_select_objects_command_entity_pick_and_relaunch() {
+        let mut cmd = SelectObjectsCommand::new("MOVE");
+        assert!(cmd.is_selection_gathering());
+        assert_eq!(cmd.prompt(), "MOVE  Select objects:");
+
+        let h1 = Handle::new(42);
+        let h2 = Handle::new(43);
+
+        // Pick first entity
+        let res1 = cmd.on_entity_pick(h1, DVec3::ZERO);
+        assert!(matches!(res1, CmdResult::NeedPoint));
+        assert_eq!(cmd.handles, vec![h1]);
+
+        // Duplicate pick is ignored
+        let res_dup = cmd.on_entity_pick(h1, DVec3::ZERO);
+        assert!(matches!(res_dup, CmdResult::NeedPoint));
+        assert_eq!(cmd.handles, vec![h1]);
+
+        // Pick second entity
+        let res2 = cmd.on_entity_pick(h2, DVec3::ZERO);
+        assert!(matches!(res2, CmdResult::NeedPoint));
+        assert_eq!(cmd.handles, vec![h1, h2]);
+
+        // Enter finishes selection and relaunches pending command with accumulated handles
+        let enter_res = cmd.on_enter();
+        match enter_res {
+            CmdResult::Relaunch(relaunch_cmd, handles) => {
+                assert_eq!(relaunch_cmd, "MOVE");
+                assert_eq!(handles, vec![h1, h2]);
+            }
+            _ => panic!("expected CmdResult::Relaunch"),
+        }
+    }
+
+    #[test]
+    fn test_select_objects_command_single_pick_variant() {
+        let mut cmd = SelectObjectsCommand::instant("CHAMFER");
+        let h = Handle::new(99);
+
+        // Single-object variant relaunches immediately on pick
+        let res = cmd.on_entity_pick(h, DVec3::ZERO);
+        match res {
+            CmdResult::Relaunch(relaunch_cmd, handles) => {
+                assert_eq!(relaunch_cmd, "CHAMFER");
+                assert_eq!(handles, vec![h]);
+            }
+            _ => panic!("expected immediate CmdResult::Relaunch"),
+        }
+    }
+}

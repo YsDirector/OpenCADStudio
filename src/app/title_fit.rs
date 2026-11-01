@@ -17,7 +17,7 @@
 //! 显式设置 `width_factor` 的字段不覆盖（用户选择优先）。
 
 use codec::types::{Vector2, Vector3};
-use codec::{CadDocument, EntityType};
+use codec::{Document, EntityType};
 
 /// 平均字符宽（×字高）。模板字体（朱雀仿宋）实测 ≈0.735，取 0.75 保守估计：
 /// 估计偏大只会略多压缩一点，不会漏压导致越格。
@@ -35,7 +35,7 @@ const MIN_WIDTH_FACTOR: f64 = 0.05;
 /// * `applied_paths` — 本次请求实际生效的属性路径（用于识别显式
 ///   `width_factor` 设置，遵循「用户显式值优先」）。
 pub(crate) fn fit_edited_attributes(
-    document: &CadDocument,
+    document: &Document,
     source: &EntityType,
     edited: &mut EntityType,
     applied_paths: &[String],
@@ -101,7 +101,7 @@ pub(crate) fn fit_edited_attributes(
 
 /// 单个属性：算目标宽度因子，必要时写回。
 fn fit_one(
-    document: &CadDocument,
+    document: &Document,
     block_name: &str,
     transform: &codec::types::Transform,
     attr: &mut codec::entities::AttributeEntity,
@@ -155,7 +155,7 @@ fn fit_by_length_only(attr: &mut codec::entities::AttributeEntity) {
 
 /// 沿文字基线方向量出前后两面墙的距离（格宽）。量不到返回 `None`。
 fn cell_width_along_baseline(
-    document: &CadDocument,
+    document: &Document,
     block_name: &str,
     transform: &codec::types::Transform,
     attr: &codec::entities::AttributeEntity,
@@ -279,7 +279,7 @@ mod tests {
     use codec::entities::{AttributeEntity, Insert, Line};
     use codec::tables::BlockRecord;
     use codec::types::Handle;
-    use codec::{CadDocument, EntityType};
+    use codec::{Document, EntityType};
 
     /// 造一块「格子 + 图样代号属性」的图框：块内格 x∈[0,60]、y∈[0,12]，
     /// 属性贴右墙、字高 7、180°（与 A3 模板折算前一致）。
@@ -289,10 +289,10 @@ mod tests {
         value: &str,
         width_factor: f64,
         scale: f64,
-    ) -> (CadDocument, Insert, Insert) {
-        let mut document = CadDocument::default();
+    ) -> (Document, Insert, Insert) {
+        let mut document = Document::default();
         let mut record = BlockRecord::new("TITLE");
-        let add = |document: &mut CadDocument, entity: EntityType, record: &mut BlockRecord| {
+        let add = |document: &mut Document, entity: EntityType, record: &mut BlockRecord| {
             let handle = document.add_entity(entity).unwrap_or(Handle::NULL);
             record.entity_handles.push(handle);
         };
@@ -404,7 +404,7 @@ mod tests {
 
     #[test]
     fn attribute_without_a_cell_falls_back_to_the_length_rule() {
-        let mut document = CadDocument::default();
+        let mut document = Document::default();
         document.block_records.add(BlockRecord::new("BARE")).unwrap();
         let make_insert = |value: &str| {
             let mut insert = Insert::new("BARE", Vector3::new(0.0, 0.0, 0.0));
@@ -425,7 +425,7 @@ mod tests {
 
     #[test]
     fn unrelated_attribute_tags_are_not_shrunk_without_geometry() {
-        let mut document = CadDocument::default();
+        let mut document = Document::default();
         document.block_records.add(BlockRecord::new("BARE")).unwrap();
         let mut insert = Insert::new("BARE", Vector3::new(0.0, 0.0, 0.0));
         let mut attribute = AttributeEntity::simple("图样名称", "some very long title");

@@ -943,7 +943,7 @@ fn req_timed(
 
 fn snapshot(sender: &Arc<dyn PluginRequestSender>) -> Result<acadrust::CadDocument, String> {
     match req_timed(sender, PluginRequest::DocumentSnapshot, "DocumentSnapshot") {
-        Ok(PluginResponse::Document(doc)) => Ok(*doc),
+        Ok(PluginResponse::Document(doc)) => Ok((*doc).into()),
         Ok(other) => Err(format!("DocumentSnapshot 返回异常: {other:?}")),
         Err(e) => Err(e),
     }
@@ -960,34 +960,34 @@ pub(crate) fn card_frame_factor_via_sender(
     Ok(crate::card_frame_factor(&snapshot(sender)?, at))
 }
 
-/// 开启插件撤销事务（`HostApi::begin_undo`）。
+/// 开启插件撤销事务（`HostApi::begin_undo_group`）。
 ///
 /// HTTP/GUI 流程的一次用户动作会向宿主发多条请求（各占一条 message），而宿主在每条
 /// message 末尾提交并丢弃空 pending 快照（`src/app/update/mod.rs:296` +
-/// `src/app/history.rs:285`）——所以必须用事务把快照握住，写完再 `commit_undo`。
+/// `src/app/history.rs:285`）——所以必须用事务把快照握住，写完再 `end_undo_group`。
 /// 旧宿主没有这对请求时，请求会报错（等同现状：不可撤销），不影响主流程。
-fn begin_undo(sender: &Arc<dyn PluginRequestSender>, label: &str) -> Result<(), String> {
+fn begin_undo_group(sender: &Arc<dyn PluginRequestSender>, label: &str) -> Result<(), String> {
     req_timed(
         sender,
-        PluginRequest::BeginUndo {
+        PluginRequest::BeginUndoGroup {
             label: label.to_string(),
         },
-        "BeginUndo",
+        "BeginUndoGroup",
     )?;
     Ok(())
 }
 
-/// 提交 `begin_undo` 开启的事务，让它成为一个撤销条目（revision 同时自增）。
+/// 提交 `begin_undo_group` 开启的事务，让它成为一个撤销条目（revision 同时自增）。
 /// 失败中途也调用一次：无改动时空条目会被宿主丢弃，未调用则会被下一次历史操作
 /// （另一次 push/begin 或撤销）兜底关闭。
-fn commit_undo(sender: &Arc<dyn PluginRequestSender>) {
-    let _ = req_timed(sender, PluginRequest::CommitUndo, "CommitUndo");
+fn end_undo_group(sender: &Arc<dyn PluginRequestSender>) {
+    let _ = req_timed(sender, PluginRequest::EndUndoGroup, "EndUndoGroup");
 }
 
 /// 标记图纸已修改。宿主里 `tabs[i].dirty = true` 的唯一来源是 SetDirty；
 /// add/remove/write/bump 都不会置 dirty。不加的话，关闭 OCS 时不弹"未保存"
-/// 提示，引导服务生成的改动会静默丢失。写套路：BeginUndo → mutate → SetDirty →
-/// BumpGeometry → CommitUndo（见 `begin_undo` / `commit_undo`）。
+/// 提示，引导服务生成的改动会静默丢失。写套路：BeginUndoGroup → mutate → SetDirty →
+/// BumpGeometry → EndUndoGroup（见 `begin_undo_group` / `end_undo_group`）。
 fn mark_dirty(sender: &Arc<dyn PluginRequestSender>) -> Result<(), String> {
     req_timed(sender, PluginRequest::SetDirty, "SetDirty")?;
     Ok(())
@@ -3843,7 +3843,7 @@ fn do_apply(
     let posted = handle_hex(&req.handle)?;
 
     // “仅应用”（刷新参数记录 / 写 PE_URL）也改文档 → 开事务，结束时 commit。
-    begin_undo(sender, "尺寸引导")?;
+    begin_undo_group(sender, "尺寸引导")?;
 
     // ── 编辑模式：posted 实体本身是 OCSM 生成的标注（带 `OCSM_EDIT`）──
     // 用记录里的引导几何造一条**临时引导**重走现有生成路径（各类型代码不用改），
@@ -3861,7 +3861,7 @@ fn do_apply(
                 "WriteRecord",
             );
             mark_dirty(sender)?;
-            commit_undo(sender);
+            end_undo_group(sender);
             return Ok(r#"{"ok":true,"edit":true}"#.into());
         }
         // 优先复用原引导（若还在且类型兼容），否则造临时引导。
@@ -3938,7 +3938,7 @@ fn do_apply(
         }
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
-        commit_undo(sender);
+        end_undo_group(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "edit": true,
@@ -4001,7 +4001,7 @@ fn do_apply(
             req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         }
     }
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(out)
 }
 
@@ -4554,7 +4554,7 @@ pub(crate) fn apply_joint(
 ) -> Result<String, String> {
     let spec = crate::joint::JointSpec::from_json(body)?;
     let plan = crate::joint::plan(&spec)?;
-    begin_undo(sender, "OCSM 螺栓副")?;
+    begin_undo_group(sender, "OCSM 螺栓副")?;
     let doc = snapshot(sender)?;
     // ① 先把整链几何算出来（生成 → 遮挡裁剪）：裁剪后的几何才是块定义
     let built = crate::joint::build(&plan, spec.trim)?;
@@ -4633,7 +4633,7 @@ pub(crate) fn apply_joint(
     }
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
-    commit_undo(sender);
+    end_undo_group(sender);
     // 报告里补一句遮挡裁剪（命令行日志要能审计"哪些线为什么没画"）
     let mut report = plan.report.clone();
     if !trim_notes.is_empty() {
@@ -5040,7 +5040,7 @@ fn apply_joint_place(
         )
     };
     // 建预览块也是文档改动 → 单独一个撤销条目（与出库同规矩）
-    begin_undo(sender, "螺栓副预览")?;
+    begin_undo_group(sender, "螺栓副预览")?;
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
         req_timed(
@@ -5052,7 +5052,7 @@ fn apply_joint_place(
             "AddBlockRecord",
         )?;
     }
-    commit_undo(sender);
+    end_undo_group(sender);
     crate::set_pending_joint(crate::PendingJoint {
         spec_json: spec.to_json(),
         block: block.clone(),
@@ -5368,7 +5368,7 @@ fn apply_gear_export(
     let part = crate::gear::generate(&p, view, n)?;
     let block = crate::gear::block_name(&p, view);
 
-    begin_undo(sender, "齿轮出图")?;
+    begin_undo_group(sender, "齿轮出图")?;
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
         req_timed(
@@ -5387,7 +5387,7 @@ fn apply_gear_export(
             if p.is_spline() { view.label_for_spline(p.kind) } else { view.label() }
         ),
     ));
-    commit_undo(sender);
+    end_undo_group(sender);
     let notes = if p.is_spline() {
         p.spline_engine().map(|(e, _)| p.spline_notes(&e)).unwrap_or_default()
     } else {
@@ -5420,7 +5420,7 @@ pub(crate) fn apply_gear_insert(
     let part = crate::gear::generate(&req.params, req.view, n)?;
     let block = crate::gear::block_name(&req.params, req.view);
 
-    begin_undo(sender, "齿轮插入")?;
+    begin_undo_group(sender, "齿轮插入")?;
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
         req_timed(
@@ -5459,7 +5459,7 @@ pub(crate) fn apply_gear_insert(
     }
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
@@ -5627,12 +5627,12 @@ pub(crate) fn apply_shaft_export(
         let n = frame_scale_at(&doc, [at[0], at[1], 0.0]);
         let shaft = crate::shaft::build(&program, n)?;
         let (segments, total, max_d) = (shaft.segment_count, shaft.total_length, shaft.max_diameter);
-        begin_undo(sender, "轴插入")?;
+        begin_undo_group(sender, "轴插入")?;
         let entities = crate::shaft::place(shaft.entities, at, rot);
         req_timed(sender, PluginRequest::AddEntities(entities), "AddEntities")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
-        commit_undo(sender);
+        end_undo_group(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "message": format!(
@@ -5663,7 +5663,7 @@ pub(crate) fn apply_shaft_export(
         crate::partgen_kit::trim(total)
     );
 
-    begin_undo(sender, "轴出图")?;
+    begin_undo_group(sender, "轴出图")?;
     let exists = snapshot(sender)?
         .block_records
         .iter()
@@ -5691,7 +5691,7 @@ pub(crate) fn apply_shaft_export(
         .to_string(),
         label.clone(),
     ));
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
@@ -5796,12 +5796,12 @@ pub(crate) fn apply_hole_export(
     // ① 显式落点（`at`）→ 直接插入，一次事务。
     if let Some(at) = model.at {
         let rot = model.rot;
-        begin_undo(sender, "孔插入")?;
+        begin_undo_group(sender, "孔插入")?;
         let entities = crate::hole::place(built.entities, at, rot);
         req_timed(sender, PluginRequest::AddEntities(entities), "AddEntities")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
-        commit_undo(sender);
+        end_undo_group(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "message": format!("已插入{label}于 ({:.3}, {:.3})", at[0], at[1]),
@@ -5817,7 +5817,7 @@ pub(crate) fn apply_hole_export(
 
     // ② 无落点 → 建块 + 登记待放置件（与轴/齿轮/零件库同一条放置态通路）。
     let block = crate::hole::block_name(&model);
-    begin_undo(sender, "孔出图")?;
+    begin_undo_group(sender, "孔出图")?;
     let exists = snapshot(sender)?
         .block_records
         .iter()
@@ -5845,7 +5845,7 @@ pub(crate) fn apply_hole_export(
         .to_string(),
         label.clone(),
     ));
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
@@ -5924,7 +5924,7 @@ pub(crate) fn apply_spline_export(
         .block_records
         .iter()
         .any(|b| b.name == block);
-    begin_undo(sender, &crate::i18n::t("cmd.card.label.spline"))?;
+    begin_undo_group(sender, &crate::i18n::t("cmd.card.label.spline"))?;
     // 幂等 ensure（与 CLI `cmd_spline_table` 同一做法：图层 + 文字样式）。
     req_timed(
         sender,
@@ -5957,7 +5957,7 @@ pub(crate) fn apply_spline_export(
         )?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
-        commit_undo(sender);
+        end_undo_group(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "message": crate::i18n::t_fmt(
@@ -6005,7 +6005,7 @@ pub(crate) fn apply_spline_export(
         model.pending_attrs()?,
     )
     .with_frame_scaled());
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "pending": true,
@@ -6447,7 +6447,7 @@ pub(crate) fn apply_card_export(
         .block_records
         .iter()
         .any(|b| b.name == block);
-    begin_undo(sender, &kind_label)?;
+    begin_undo_group(sender, &kind_label)?;
     req_timed(
         sender,
         PluginRequest::EnsureLayers(crate::layer_defs()),
@@ -6472,7 +6472,7 @@ pub(crate) fn apply_card_export(
         req_timed(sender, PluginRequest::AddEntities(vec![ins]), "AddEntities")?;
         req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
         mark_dirty(sender)?;
-        commit_undo(sender);
+        end_undo_group(sender);
         return Ok(serde_json::json!({
             "ok": true,
             "message": crate::i18n::t_fmt(
@@ -6510,7 +6510,7 @@ pub(crate) fn apply_card_export(
         .with_scale(scale)
         .with_frame_scaled(),
     );
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "pending": true,
@@ -6573,7 +6573,7 @@ fn apply_part_export(
     );
 
     // 出库会新建块定义（文档改动）→ 开事务，结束时 commit。
-    begin_undo(sender, "零件出库")?;
+    begin_undo_group(sender, "零件出库")?;
     // 块定义：幂等创建（预览要引用它，所以必须在出库时就建好）
     let exists = snapshot(sender)?.block_records.iter().any(|b| b.name == block);
     if !exists {
@@ -6610,7 +6610,7 @@ fn apply_part_export(
 
     // 出库后窗口由页面自己 `window.close()` 关闭（实测 chromium 允许；
     // 若是浏览器拒绝关闭（如 Firefox 标签页），用户手动切回图纸即可）。
-    commit_undo(sender);
+    end_undo_group(sender);
     Ok(serde_json::json!({
         "ok": true,
         "message": format!(
@@ -6696,7 +6696,7 @@ pub(crate) fn apply_part_pick(
     };
 
     // 插入会建块 + 落 INSERT 实体 → 开事务，结束时 commit。
-    begin_undo(sender, &crate::i18n::t("cmd.parts.undo_insert"))?;
+    begin_undo_group(sender, &crate::i18n::t("cmd.parts.undo_insert"))?;
     // 块定义幂等：已存在就不再建（同名块重复插入直接复用）
     let exists = snapshot(sender)?
         .block_records
@@ -6764,7 +6764,7 @@ pub(crate) fn apply_part_pick(
     }
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
-    commit_undo(sender);
+    end_undo_group(sender);
 
     Ok(serde_json::json!({
         "ok": true,
@@ -6869,7 +6869,7 @@ fn apply_roughness(
 
     let doc = snapshot(sender)?;
     // 符号会新建块 + 实体、并可能补齐样式/图层 → 开事务，结束时 commit。
-    begin_undo(sender, &crate::i18n::t("cmd.rough.undo_insert"))?;
+    begin_undo_group(sender, &crate::i18n::t("cmd.rough.undo_insert"))?;
     // 幂等 ensure：文档缺 OCSM_GB 样式 / 8符号标注层时补齐（新图纸直接 OCSMRGH
     // 时宿主渲染 ATTDEF 会 fallback 未知字体、图层色错乱——用户实测）。
     if !doc
@@ -7129,7 +7129,7 @@ fn apply_roughness(
     };
     req_timed(sender, PluginRequest::BumpGeometry, "BumpGeometry")?;
     mark_dirty(sender)?;
-    commit_undo(sender);
+    end_undo_group(sender);
 
     Ok(serde_json::json!({
         "ok": true,
@@ -9157,10 +9157,10 @@ impl crate::bom::BomSink for SenderSink<'_> {
     fn push_undo(&mut self, label: &str) -> Result<(), String> {
         req_timed(
             self.0,
-            PluginRequest::BeginUndo {
+            PluginRequest::BeginUndoGroup {
                 label: label.to_string(),
             },
-            "BeginUndo",
+            "BeginUndoGroup",
         )
         .map(|_| ())?
         ;
@@ -9595,7 +9595,7 @@ fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
                 let doc2 = match snapshot(sender) {
                     Ok(d) => d,
                     Err(e) => {
-                        commit_undo(sender);
+                        end_undo_group(sender);
                         return bad(format!("取快照失败: {e}"));
                     }
                 };
@@ -9610,10 +9610,10 @@ fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
             // ③ 新表块挂编辑页链接（同一撤销事务；旧块死链接也顺带重写）。
             let link_n = stamp_bom_links_http(sender);
             if let Err(e) = mark_dirty(sender) {
-                commit_undo(sender);
+                end_undo_group(sender);
                 return bad(e);
             }
-            commit_undo(sender);
+            end_undo_group(sender);
             let mut payload = bom_payload(sender).unwrap_or(serde_json::json!({"ok": true}));
             payload["report"] = serde_json::json!({
                 "rows": rep.rows, "cols": rep.cols, "replaced": rep.removed,
@@ -9624,7 +9624,7 @@ fn api_bom_apply(body: &[u8], sender: &Arc<dyn PluginRequestSender>) -> (u16, &'
             (200, json, payload.to_string())
         }
         Err(e) => {
-            commit_undo(sender);
+            end_undo_group(sender);
             (
                 400,
                 json,
@@ -9698,10 +9698,10 @@ fn api_bom_import(
         Ok(rep) => {
             stamp_bom_links_http(sender);
             if let Err(e) = mark_dirty(sender) {
-                commit_undo(sender);
+                end_undo_group(sender);
                 return bad(e);
             }
-            commit_undo(sender);
+            end_undo_group(sender);
             let locked = rows.iter().filter(|r| r.lock_qty.is_some()).count();
             let kept = rows
                 .iter()
@@ -9715,7 +9715,7 @@ fn api_bom_import(
             (200, json, payload.to_string())
         }
         Err(e) => {
-            commit_undo(sender);
+            end_undo_group(sender);
             (
                 400,
                 json,
@@ -9795,13 +9795,13 @@ fn api_bom_export(
         }
     };
     // 导出基线（同一撤销事务）：每行当时的数量 → EXPORTED_APP（「手改即锁」的比对值）。
-    if let Err(e) = begin_undo(sender, "OCSM 明细表导出") {
+    if let Err(e) = begin_undo_group(sender, "OCSM 明细表导出") {
         return bad(e);
     }
     let doc2 = match snapshot(sender) {
         Ok(d) => d,
         Err(e) => {
-            commit_undo(sender);
+            end_undo_group(sender);
             return bad(format!("取快照失败: {e}"));
         }
     };
@@ -9837,7 +9837,7 @@ fn api_bom_export(
     let doc3 = match snapshot(sender) {
         Ok(d) => d,
         Err(e) => {
-            commit_undo(sender);
+            end_undo_group(sender);
             return bad(format!("取快照失败: {e}"));
         }
     };
@@ -9866,10 +9866,10 @@ fn api_bom_export(
         }
     }
     if let Err(e) = mark_dirty(sender) {
-        commit_undo(sender);
+        end_undo_group(sender);
         return bad(e);
     }
-    commit_undo(sender);
+    end_undo_group(sender);
     let payload = serde_json::json!({
         "ok": true,
         "filename": fname,
@@ -12578,7 +12578,9 @@ impl PluginRequestSender for MockSender {
         use PluginResponse as P;
         match req {
             R::DocumentSnapshot => {
-                Ok(P::Document(Box::new(self.doc.lock().unwrap().clone())))
+                Ok(P::Document(Box::new(
+                    self.doc.lock().unwrap().clone().into(),
+                )))
             }
             R::ReadRecord { handle, app_name } => {
                 // 从（可变的）测试文档里真读：编辑模式的 OCSM_EDIT 往返靠它。
@@ -12706,11 +12708,11 @@ impl PluginRequestSender for MockSender {
                 self.undos.lock().unwrap().push(label);
                 Ok(P::Ok)
             }
-            R::BeginUndo { label } => {
+            R::BeginUndoGroup { label } => {
                 self.undos.lock().unwrap().push(format!("begin:{label}"));
                 Ok(P::Ok)
             }
-            R::CommitUndo => {
+            R::EndUndoGroup => {
                 self.undos.lock().unwrap().push("commit".into());
                 Ok(P::Ok)
             }

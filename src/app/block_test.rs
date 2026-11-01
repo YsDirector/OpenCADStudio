@@ -7,7 +7,7 @@ pub(super) struct BlockTestSession {
     pub source_id: u64,
     pub definition: codec::Handle,
     pub insert: codec::Handle,
-    pub baseline: std::sync::Arc<codec::CadDocument>,
+    pub baseline: std::sync::Arc<codec::Document>,
 }
 
 impl OpenCADStudio {
@@ -149,7 +149,7 @@ impl OpenCADStudio {
                     crate::scene::block_actions::all_parameters(&tab.scene.document, definition)
                         .into_iter()
                         .filter(|parameter| {
-                            actions
+                            parameter.grip != codec::Handle::NULL && actions
                                 .iter()
                                 .any(|(_, _, _, parameter_id)| *parameter_id == parameter.id)
                         })
@@ -172,6 +172,7 @@ impl OpenCADStudio {
         self.discard_block_tests(source_id);
         self.visibility_popup = None;
         self.table_popup = None;
+        self.flip_popup = None;
         self.grip_popup = None;
         self.grip_hover = None;
         self.tabs.push(tab);

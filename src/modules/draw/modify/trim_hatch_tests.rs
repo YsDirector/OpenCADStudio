@@ -83,6 +83,100 @@ fn trim_hatch_rectangle_removes_clicked_half_without_an_external_outline() {
 }
 
 #[test]
+fn trim_hatch_heavy_and_3d_polyline_cutters_are_projected_segment_by_segment() {
+    let points = vec![Vector3::new(10.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)];
+    let mut heavy = codec::entities::Polyline::from_points(points.clone());
+    heavy.common.handle = Handle::new(2);
+    let mut spatial = codec::entities::Polyline3D::new();
+    spatial.common.handle = Handle::new(3);
+    spatial.vertices = [
+        Vector3::new(10.0, 0.0, 0.0),
+        Vector3::new(10.0, 10.0, 0.0),
+        Vector3::new(10.0, 10.0, 3.0),
+        Vector3::new(-5.0, 5.0, 3.0),
+        Vector3::new(25.0, 5.0, 3.0),
+    ]
+    .into_iter()
+    .map(codec::entities::Vertex3DPolyline::new)
+    .collect();
+
+    for cutter in [EntityType::Polyline(heavy), EntityType::Polyline3D(spatial)] {
+        let result = cut(&hatch(), &[cutter], [15.0, 5.0])
+            .expect("a coplanar polyline's constituent edge must split the fill");
+        assert!((area(&result.kept) - 100.0).abs() < 1e-8);
+        assert!(filled(&result.kept, [5.0, 5.0]));
+        assert!(!filled(&result.kept, [15.0, 5.0]));
+    }
+}
+
+#[test]
+fn trim_hatch_does_not_read_mesh_vertex_order_as_a_cutting_path() {
+    let points = vec![Vector3::new(10.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)];
+    let mut polygon_mesh = codec::entities::Polyline::from_points(points.clone());
+    polygon_mesh.common.handle = Handle::new(2);
+    polygon_mesh.flags |= codec::entities::PolylineFlags::POLYGON_MESH;
+    let mut polyface = codec::entities::Polyline::from_points(points.clone());
+    polyface.common.handle = Handle::new(3);
+    polyface.flags |= codec::entities::PolylineFlags::POLYFACE_MESH;
+    let mut spatial_mesh = codec::entities::Polyline3D::new();
+    spatial_mesh.common.handle = Handle::new(4);
+    spatial_mesh.flags.is_3d_mesh = true;
+    spatial_mesh.vertices = points
+        .iter()
+        .copied()
+        .map(codec::entities::Vertex3DPolyline::new)
+        .collect();
+    let mut spatial_polyface = codec::entities::Polyline3D::new();
+    spatial_polyface.common.handle = Handle::new(5);
+    spatial_polyface.flags.is_polyface_mesh = true;
+    spatial_polyface.vertices = points
+        .into_iter()
+        .map(codec::entities::Vertex3DPolyline::new)
+        .collect();
+
+    for cutter in [
+        EntityType::Polyline(polygon_mesh),
+        EntityType::Polyline(polyface),
+        EntityType::Polyline3D(spatial_mesh),
+        EntityType::Polyline3D(spatial_polyface),
+    ] {
+        assert!(
+            cut(&hatch(), &[cutter], [15.0, 5.0]).is_none(),
+            "mesh vertices must not be interpreted as an ordered trim path"
+        );
+    }
+}
+
+#[test]
+fn trim_hatch_does_not_use_fit_control_points_as_chordal_cutters() {
+    let points = vec![Vector3::new(10.0, 0.0, 0.0), Vector3::new(10.0, 10.0, 0.0)];
+    let mut curve_fit = codec::entities::Polyline::from_points(points.clone());
+    curve_fit.common.handle = Handle::new(2);
+    curve_fit.flags |= codec::entities::PolylineFlags::CURVE_FIT;
+    let mut spline_fit = codec::entities::Polyline::from_points(points.clone());
+    spline_fit.common.handle = Handle::new(3);
+    spline_fit.flags |= codec::entities::PolylineFlags::SPLINE_FIT;
+    let mut spatial_spline = codec::entities::Polyline3D::from_points(points.clone());
+    spatial_spline.common.handle = Handle::new(4);
+    spatial_spline.flags.spline_fit = true;
+    let mut smoothed = codec::entities::Polyline3D::from_points(points);
+    smoothed.common.handle = Handle::new(5);
+    smoothed.smooth_type = codec::entities::polyline3d::SmoothSurfaceType::CubicBSpline;
+
+    for cutter in [
+        EntityType::Polyline(curve_fit),
+        EntityType::Polyline(spline_fit),
+        EntityType::Polyline3D(spatial_spline),
+        EntityType::Polyline3D(smoothed),
+    ] {
+        assert!(
+            cut(&hatch(), &[cutter], [15.0, 5.0]).is_none(),
+            "fit points must not be treated as a sequence of straight cutter edges"
+        );
+    }
+}
+
+#[test]
 fn trim_hatch_no_partition_dangling_off_plane_outside_or_boundary_is_noop() {
     let h = hatch();
     assert!(cut(&h, &[], [15.0, 5.0]).is_none());

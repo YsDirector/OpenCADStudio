@@ -81,9 +81,12 @@ const WEB_ALIAS_KEY: &str = "opencadstudio.aliases";
 /// migrated forward (see `introduced_at` / `migrate_aliases`). Version 1 shipped
 /// the pre-REDRAW table; version 2 introduced the REDRAW-family aliases; version 3
 /// introduced HB (HATCHTOBACK); version 4 introduced ER (EXTERNALREFERENCES);
-/// version 10 adds the block command-line forms, block editor shortcuts, and
-/// the OCSM shortcuts in the host table (including routing `D` to QDIM).
-const DEFAULT_ALIASES_VERSION: u32 = 10;
+/// version 10 the block command-line forms, block editor shortcuts, and the
+/// OCSM shortcuts in the host table (including routing `D` to QDIM);
+/// version 11 IO (INSERTOBJ); version 12 DLU (DATALINKUPDATE); version 13 SP
+/// (SPELL); version 14 the multileader set (MLE, LEAD; LE and MLA retargeted,
+/// MLR / MLAL / QL dropped); version 15 TS (TABLESTYLE) and CT (CTABLESTYLE).
+const DEFAULT_ALIASES_VERSION: u32 = 15;
 
 #[cfg(target_arch = "wasm32")]
 const WEB_ALIAS_VERSION_KEY: &str = "opencadstudio.aliases.version";
@@ -132,6 +135,28 @@ fn introduced_at(version: u32) -> &'static [(&'static str, &'static str)] {
             ("BOMXLSXI", "OCSMBOMXLSXI"),
             ("BOMCFG", "OCSMBOMCFG"),
         ],
+        11 => &[("IO", "INSERTOBJ")],
+        12 => &[("DLU", "DATALINKUPDATE")],
+        13 => &[("SP", "SPELL")],
+        14 => &[("MLE", "MLEADEREDIT"), ("LEAD", "LEADER")],
+        15 => &[("TS", "TABLESTYLE"), ("CT", "CTABLESTYLE")],
+        _ => &[],
+    }
+}
+
+/// Defaults a version changed: `(alias, old command, new command)`, an empty
+/// new command dropping the alias. Applied only where the profile still holds
+/// the old default.
+fn retargeted_at(version: u32) -> &'static [(&'static str, &'static str, &'static str)] {
+    match version {
+        10 => LEGACY_DEFAULT_REWRITES,
+        14 => &[
+            ("LE", "LEADER", "QLEADER"),
+            ("MLA", "MLEADERADD", "MLEADERALIGN"),
+            ("MLR", "MLEADERREMOVE", ""),
+            ("MLAL", "MLEADERALIGN", ""),
+            ("QL", "QLEADER", ""),
+        ],
         _ => &[],
     }
 }
@@ -154,12 +179,14 @@ fn migrate_aliases(stored: &mut FxHashMap<String, String>, from_version: u32) ->
     }
     let mut changed = false;
     for version in from_version + 1..=DEFAULT_ALIASES_VERSION {
-        if version == 10 {
-            for (alias, old, new) in LEGACY_DEFAULT_REWRITES {
-                if stored.get(*alias).is_some_and(|current| current == old) {
-                    stored.insert((*alias).to_string(), (*new).to_string());
-                    changed = true;
+        for (alias, old, new) in retargeted_at(version) {
+            if stored.get(*alias).is_some_and(|cmd| cmd.eq_ignore_ascii_case(old)) {
+                if new.is_empty() {
+                    stored.remove(*alias);
+                } else {
+                    stored.insert(alias.to_string(), new.to_string());
                 }
+                changed = true;
             }
         }
         for (alias, cmd) in introduced_at(version) {

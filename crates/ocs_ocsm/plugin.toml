@@ -12,7 +12,7 @@ version = "0.2.0"
 description = "OCSM 初始化 + 数字键 1-10 快速图层 + 图框插入 + 尺寸引导/标注转换 + 标准件/螺栓副 + 命令手册（OCSMHELP）"
 
 [opencad]
-api_version = 5
+api_version = 14
 # 两者都是**部署时替换**的占位符（不要手改；用 tools/deploy_plugin.sh 或下面 PLUGIN.md 的两条 sed）：
 # * rustc_version —— 宿主 v2026.36+ 对 API≥4 的 rustc 门禁；
 # * acadrust_source —— 宿主 API≥4 的 acadrust 源指纹门禁（上游 v2026.38 起强制；填错/缺失

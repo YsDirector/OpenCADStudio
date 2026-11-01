@@ -2,7 +2,7 @@
 use crate::command::{CadCommand, CmdOption, CmdResult, InputKind, PointPickContext};
 use crate::scene::block_actions as actions;
 use codec::objects::ObjectType;
-use codec::{CadDocument, Handle};
+use codec::{Document, Handle};
 use glam::DVec3;
 
 inventory::submit!(crate::command::CommandRegistration {
@@ -41,7 +41,7 @@ impl ActionSetCommand {
     pub(crate) fn new(
         document: u64,
         definition: Handle,
-        doc: &CadDocument,
+        doc: &Document,
         selected: Option<Handle>,
     ) -> Self {
         let candidates = actions::actions(doc, definition)
@@ -50,7 +50,9 @@ impl ActionSetCommand {
                 handle,
                 name: a.element.name.clone(),
                 at: actions::v(a.display_location),
-                targets: a.dependencies.clone(),
+                // Native grip links are retained by retargeting, while this
+                // command edits the geometric selection only.
+                targets: a.dependencies.iter().copied().filter(|handle| doc.get_entity(*handle).is_some()).collect(),
                 stretch: actions::needs_frame(kind),
                 polar: kind == actions::Kind::PolarStretch,
                 expected: doc.objects[&handle].clone(),

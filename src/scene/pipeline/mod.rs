@@ -288,6 +288,10 @@ pub struct Pipeline {
     pub(crate) wire_arena_fallback_handles: rustc_hash::FxHashSet<codec::Handle>,
     /// The Model content id both arenas currently mirror (`u64::MAX` = none).
     pub(crate) wire_arena_id: u64,
+    /// The draw-depth generation the arenas' slabs baked. A patch rewrites
+    /// only the changed entities, so after a full depth rebuild the arenas
+    /// have to be rebuilt instead of patched.
+    pub(crate) wire_arena_depth_generation: u64,
     /// Handles that contributed to this slot's retained analytical uploads.
     pub(crate) partition_contributors: rustc_hash::FxHashSet<codec::Handle>,
     /// The draw-depth generation those uploads baked. A full depth rebuild
@@ -330,8 +334,9 @@ pub struct Pipeline {
     gpu_point_clouds: point_cloud_gpu::PointCloudGpu,
     /// Batched mesh geometry — every solid's LOD0 concatenated into a few large
     /// buffers so the whole set draws in a handful of calls instead of one per
-    /// solid. Hover / selection never re-pack it.
-    gpu_mesh_batch: Vec<mesh_gpu::MeshBatchChunk>,
+    /// solid. Hover / selection never re-pack it. Shared with every other slot
+    /// drawing the same mesh set (`MultiPipeline::mesh_batch_cache`).
+    gpu_mesh_batch: std::sync::Arc<Vec<mesh_gpu::MeshBatchChunk>>,
     /// Small mutable working set rebuilt after entity-only edits. Static chunks
     /// touched by an edit are disabled wholesale and their current handles are
     /// repacked here, keeping the rest of a multi-million-triangle scene resident.
@@ -1066,7 +1071,7 @@ impl Pipeline {
             visibility: vis,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
+                has_dynamic_offset: binding < 2,
                 min_binding_size: None,
             },
             count: None,
@@ -2484,6 +2489,7 @@ impl Pipeline {
             wire_arena_fallback_kind: None,
             wire_arena_fallback_handles: rustc_hash::FxHashSet::default(),
             wire_arena_id: u64::MAX,
+            wire_arena_depth_generation: u64::MAX,
             partition_contributors: rustc_hash::FxHashSet::default(),
             partition_depth_generation: u64::MAX,
             wire_cull_key: (u64::MAX, u64::MAX, 0, 0),
@@ -2503,7 +2509,7 @@ impl Pipeline {
             wipeout_skip_flags: vec![],
             gpu_images: vec![],
             gpu_point_clouds,
-            gpu_mesh_batch: vec![],
+            gpu_mesh_batch: Default::default(),
             gpu_mesh_dynamic: vec![],
             mesh_disabled_chunks: rustc_hash::FxHashSet::default(),
             mesh_dynamic_handles: rustc_hash::FxHashSet::default(),
@@ -3630,18 +3636,47 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        meshes: &[MeshLodSet],
+        meshes: &std::sync::Arc<Vec<MeshLodSet>>,
+        cache: &mut MeshBatchCache,
     ) {
         let started = iced::time::Instant::now();
-        let (mut chunks, triangles) = mesh_gpu::build_mesh_batch(device, queue, meshes);
+        // Release this slot's previous batch, then drop batches no slot draws.
+        self.gpu_mesh_batch = Default::default();
+        cache.retain(|_, (source, chunks)| {
+            source.strong_count() > 0 && std::sync::Arc::strong_count(chunks) > 1
+        });
+        // Several viewports (and panes) showing the same mesh set share one
+        // copy instead of each packing and uploading the whole drawing.
+        let key = std::sync::Arc::as_ptr(meshes) as usize;
+        let shared = cache.get(&key).and_then(|(source, chunks)| {
+            source
+                .upgrade()
+                .is_some_and(|source| std::sync::Arc::ptr_eq(&source, meshes))
+                .then(|| std::sync::Arc::clone(chunks))
+        });
+        let (chunks, triangles) = match shared {
+            Some(chunks) => (chunks, 0),
+            None => {
+                let errors_before = gpu_errors_seen();
+                let (mut chunks, triangles) = mesh_gpu::build_mesh_batch(device, queue, meshes);
+                mesh_gpu::upload_chunk_material_bind_groups(
+                    device,
+                    queue,
+                    &self.mesh_material_bgl,
+                    &mut chunks,
+                );
+                let chunks = std::sync::Arc::new(chunks);
+                // A rejected upload must not be handed to the other slots.
+                if gpu_errors_seen() == errors_before {
+                    cache.insert(
+                        key,
+                        (std::sync::Arc::downgrade(meshes), std::sync::Arc::clone(&chunks)),
+                    );
+                }
+                (chunks, triangles)
+            }
+        };
         let built_at = iced::time::Instant::now();
-        mesh_gpu::upload_chunk_material_bind_groups(
-            device,
-            queue,
-            &self.mesh_material_bgl,
-            &mut chunks,
-        );
-        let materials_at = iced::time::Instant::now();
         self.mesh_ranges_by_handle.clear();
         for (chunk_index, chunk) in chunks.iter().enumerate() {
             for range in &chunk.highlight_ranges {
@@ -3678,11 +3713,10 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                 .filter(|chunk| chunk.compact_vertices)
                 .count();
             crate::perf_record!(
-                "[perf] mesh-batch {:>7.1}ms build={:.1} material={:.1} index={:.1} sets={} chunks={} compact={} instances={} triangles={}",
+                "[perf] mesh-batch {:>7.1}ms build={:.1} index={:.1} sets={} chunks={} compact={} instances={} triangles={}",
                 started.elapsed().as_secs_f64() * 1000.0,
                 built_at.duration_since(started).as_secs_f64() * 1000.0,
-                materials_at.duration_since(built_at).as_secs_f64() * 1000.0,
-                indexed_at.duration_since(materials_at).as_secs_f64() * 1000.0,
+                indexed_at.duration_since(built_at).as_secs_f64() * 1000.0,
                 meshes.len(),
                 self.gpu_mesh_batch.len(),
                 compact_chunks,
@@ -3944,8 +3978,13 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         self.gpu_point_clouds.upload(device, queue, set);
     }
 
-    pub fn set_point_cloud_view(&mut self, queue: &wgpu::Queue, light: [f32; 12]) {
-        self.gpu_point_clouds.set_view(queue, light);
+    pub fn set_point_cloud_view(
+        &mut self,
+        queue: &wgpu::Queue,
+        light: [f32; 12],
+        clip: &[[f32; 4]],
+    ) {
+        self.gpu_point_clouds.set_view(queue, light, clip);
     }
 
     /// Upload the frame's SDF text-quad vertices, and (re)build the GPU glyph
@@ -5019,7 +5058,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
                     if self.wipeout_skip_flags.get(i).copied().unwrap_or(false) {
                         continue;
                     }
-                    pass.set_bind_group(1, &wipeout.bind_group, &[]);
+                    pass.set_bind_group(1, &wipeout.bind_group, &wipeout.dynamic_offsets);
                     pass.set_vertex_buffer(0, wipeout.vertex_buffer.slice(..));
                     pass.set_vertex_buffer(1, wipeout.instance_buffer.slice(..));
                     pass.draw(0..6, 0..wipeout.instance_count);
@@ -5493,7 +5532,7 @@ analytic={:.1} regular={:.1} blocks={:.1}",
         self.gpu_wipeouts.clear();
         self.wipeout_skip_flags.clear();
         self.gpu_images.clear();
-        self.gpu_mesh_batch.clear();
+        self.gpu_mesh_batch = Default::default();
         self.gpu_mesh_dynamic.clear();
         self.mesh_disabled_chunks.clear();
         self.mesh_dynamic_handles.clear();
@@ -5595,17 +5634,27 @@ fn aabb_offscreen(
     }
     let w = clip_w as f32;
     let h = clip_h as f32;
+    // A corner behind the perspective eye mirrors across the screen, so the
+    // projected union bounds nothing: never cull in that case (#64).
     let corners = [
-        view_rot.project_point3((glam::DVec3::new(x0 as f64, y0 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x1 as f64, y0 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x0 as f64, y1 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x1 as f64, y1 as f64, 0.0) - eye).as_vec3()),
-    ];
+        (x0 as f64, y0 as f64),
+        (x1 as f64, y0 as f64),
+        (x0 as f64, y1 as f64),
+        (x1 as f64, y1 as f64),
+    ]
+    .map(|(x, y)| {
+        crate::scene::view::projection::project_ndc(
+            view_rot,
+            eye,
+            glam::DVec3::new(x, y, 0.0),
+        )
+    });
     let mut min_px = f32::INFINITY;
     let mut max_px = f32::NEG_INFINITY;
     let mut min_py = f32::INFINITY;
     let mut max_py = f32::NEG_INFINITY;
     for c in &corners {
+        let Some(c) = c else { return false };
         let px = (c.x + 1.0) * 0.5 * w;
         let py = (1.0 - c.y) * 0.5 * h;
         if px < min_px {
@@ -5647,17 +5696,27 @@ fn aabb_below_pixel(
     }
     let w = clip_w as f32;
     let h = clip_h as f32;
+    // Mirrored corners from behind the eye would fake a tiny or shifted box:
+    // keep the draw call when any corner has no real projection (#64).
     let corners = [
-        view_rot.project_point3((glam::DVec3::new(x0 as f64, y0 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x1 as f64, y0 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x0 as f64, y1 as f64, 0.0) - eye).as_vec3()),
-        view_rot.project_point3((glam::DVec3::new(x1 as f64, y1 as f64, 0.0) - eye).as_vec3()),
-    ];
+        (x0 as f64, y0 as f64),
+        (x1 as f64, y0 as f64),
+        (x0 as f64, y1 as f64),
+        (x1 as f64, y1 as f64),
+    ]
+    .map(|(x, y)| {
+        crate::scene::view::projection::project_ndc(
+            view_rot,
+            eye,
+            glam::DVec3::new(x, y, 0.0),
+        )
+    });
     let mut min_px = f32::INFINITY;
     let mut max_px = f32::NEG_INFINITY;
     let mut min_py = f32::INFINITY;
     let mut max_py = f32::NEG_INFINITY;
     for c in &corners {
+        let Some(c) = c else { return false };
         let px = (c.x + 1.0) * 0.5 * w;
         let py = (1.0 - c.y) * 0.5 * h;
         if px < min_px {
@@ -5775,6 +5834,8 @@ impl MultiPipeline {
                     || std::sync::Arc::strong_count(&entry.1) > 1
                     || std::sync::Arc::strong_count(&entry.3) > 1
             });
+            self.mesh_batch_cache
+                .retain(|_, entry| std::sync::Arc::strong_count(&entry.1) > 1);
             // Block records are host memory a released slot no longer needs;
             // the next build re-emits what it still draws.
             self.block_geometry.clear();
@@ -5910,6 +5971,16 @@ fn create_msaa_texture(
     })
 }
 
+/// Mesh-set address → (the set, its packed GPU batch). The weak handle proves
+/// the address still names the same set.
+pub(crate) type MeshBatchCache = rustc_hash::FxHashMap<
+    usize,
+    (
+        std::sync::Weak<Vec<MeshLodSet>>,
+        std::sync::Arc<Vec<mesh_gpu::MeshBatchChunk>>,
+    ),
+>;
+
 /// Holds one inner `Pipeline` per viewport drawn this frame. A single
 /// shader widget owns one `MultiPipeline`; the unified renderer grows the
 /// `inners` vector to match the viewport count and draws each into its own
@@ -5930,6 +6001,8 @@ pub struct MultiPipeline {
     pub(crate) gpu_error_epoch: usize,
     /// Definition geometry shared across viewport slots.
     pub(crate) block_geometry: wire_gpu::BlockGeometryCache,
+    /// Solid-mesh batches shared across slots, keyed by mesh-set identity.
+    pub(crate) mesh_batch_cache: MeshBatchCache,
     /// Shared resident batches, keyed by wire content identity.
     pub(crate) wire_buffer_cache: rustc_hash::FxHashMap<
         u64,
@@ -6320,6 +6393,7 @@ impl iced::widget::shader::Pipeline for MultiPipeline {
             slot_clock: 0,
             frame_rendered: std::sync::atomic::AtomicBool::new(false),
             gpu_error_epoch: gpu_errors_seen(),
+            mesh_batch_cache: Default::default(),
             wire_buffer_cache: rustc_hash::FxHashMap::default(),
         }
     }
