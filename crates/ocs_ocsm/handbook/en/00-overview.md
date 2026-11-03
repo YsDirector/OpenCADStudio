@@ -118,6 +118,7 @@ Database format: `formal command` — purpose — type (**Window** = opens a bro
 | 3 | Bearing-pressure check of the clamped parts (p ≤ p_G) | `21` §4 + `tools/crush_check.py` |
 | 4 | Assembly parameters (torque, method, scatter) | `21` §5 |
 | 5 | Materials and heat treatment | `23-knowledge-materials-heat-treatment.md` |
+| 7 | Cast body (housing outline, seat pads, lightening windows, casting order) | `25-knowledge-cast-housing.md` |
 | 6 | Drawing (drafting/dimensioning/BOM) | `20` GB drafting, `04`/`06`/`10` |
 | — | Tolerances and fits (cross-cutting: relevant to layers 2, 3 and 5) | `22-knowledge-tolerances-fits.md` |
 
