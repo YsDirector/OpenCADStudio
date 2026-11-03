@@ -1,4 +1,4 @@
-mod alias;
+pub(crate) mod alias;
 mod automation;
 pub(crate) mod control;
 pub(crate) fn automation_action_names() -> &'static [&'static str] {
@@ -9,8 +9,12 @@ pub(crate) mod config;
 pub use automation::{export_headless, run_batch, serve};
 mod annotation_data;
 mod extraction_catalog;
+mod array_grips;
 mod block_actions;
 mod block_parameter_properties;
+mod insert_attributes;
+#[cfg(test)]
+mod insert_attributes_tests;
 mod block_alignment;
 mod block_feedback;
 mod block_flip;
@@ -39,7 +43,11 @@ pub(crate) use command_driver::{
     copy_to_clipboard_kernel, define_block_raw_doc, paste_entities_kernel, PasteSpace,
 };
 pub(crate) mod commands;
+#[cfg(test)]
+mod dim_constraint_value_tests;
 pub(crate) mod dim_viewport;
+#[cfg(test)]
+mod dimension_convert_tests;
 #[cfg(test)]
 mod dimension_preview_tests;
 mod dock;
@@ -56,6 +64,10 @@ mod layers;
 mod measurement;
 mod model_ops;
 mod mtext_editor;
+#[cfg(test)]
+mod mtext_follows_style_tests;
+#[cfg(test)]
+mod mtext_style_from_selection_tests;
 mod navigation;
 #[cfg(test)]
 mod object_isolation_tests;
@@ -79,9 +91,27 @@ mod shortcuts;
 mod startup;
 pub(crate) mod style_ops;
 mod text_inline;
+mod text_style_draft;
+pub(crate) mod text_style_users;
+#[cfg(test)]
+mod text_style_data_tests;
+#[cfg(test)]
+mod text_style_font_picker_tests;
+#[cfg(test)]
+mod text_style_manager_tests;
+#[cfg(test)]
+mod text_style_update_tests;
+#[cfg(test)]
+mod text_style_layout_tests;
+#[cfg(test)]
+mod text_style_ui_tests;
+#[cfg(test)]
+mod text_style_pending_tests;
 mod tolerance_dialog;
 mod update;
 pub(crate) use update::style_import::{style_exists as style_import_exists, StyleImportDraft};
+#[cfg(test)]
+mod table_content_tests;
 mod view;
 #[cfg(test)]
 mod viewport_dimension_tests;
@@ -585,6 +615,22 @@ pub(crate) fn delobj_deletes_auxiliary(value: i16, creates_surface: bool) -> boo
     value == 2 || (value == 3 && !creates_surface)
 }
 
+/// Screenshot `window`, or `None` when it has no area. A minimized window
+/// has a 0x0 surface, and iced's renderer panics reading one back ("buffer
+/// slices can not be empty"), so its size is asked first.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn screenshot_if_drawn(
+    window: iced::window::Id,
+) -> Task<Option<iced::window::Screenshot>> {
+    iced::window::size(window).then(move |size| {
+        if size.width <= 0.0 || size.height <= 0.0 {
+            Task::done(None)
+        } else {
+            iced::window::screenshot(window).map(Some)
+        }
+    })
+}
+
 pub(super) struct OpenCADStudio {
     start: Instant,
     control: control::State,
@@ -733,6 +779,7 @@ pub(super) struct OpenCADStudio {
     /// ATTDEF dialog and Edit Attribute Definition dialog; `None` while closed.
     attdef_dialog: Option<crate::ui::window::attdef_dialog::AttdefDialogState>,
     attdef_edit: Option<crate::ui::window::attdef_dialog::AttdefEditState>,
+    insert_attr_dialog: Option<crate::ui::window::insert_attr_dialog::InsertAttrState>,
     /// Block Attribute Manager working copy; `None` while it is closed.
     attman: Option<crate::ui::window::attman_dialog::AttManState>,
     /// Field dialog working copy; `None` while closed.
@@ -749,6 +796,20 @@ pub(super) struct OpenCADStudio {
     pdf_password: Option<crate::ui::window::pdf_password_dialog::PdfPasswordState>,
     /// The Inspection Dimension window.
     dim_inspect_dialog: Option<crate::ui::window::dim_inspect_dialog::DimInspectState>,
+    /// The picked table cells' Cell Borders window.
+    table_cell_borders: Option<crate::ui::window::table_cell_dialog::CellBordersState>,
+    /// The picked table cell's Cell Contents window.
+    table_cell_contents: Option<crate::ui::window::table_cell_dialog::CellContentsState>,
+    /// The picked table cells' Cell Block window.
+    table_cell_block: Option<crate::ui::window::table_cell_dialog::CellBlockState>,
+    /// The picked table cells' Cell Data Format window.
+    table_cell_format: Option<crate::ui::window::table_cell_dialog::CellFormatState>,
+    /// A data format waiting on the invalid data type warning, and the
+    /// cells whose values read as no such type.
+    table_cell_warning: Option<(crate::ui::window::table_cell_dialog::CellFormatState, Vec<String>)>,
+    /// The Data Link Manager was opened by Link Cell: its link feeds the
+    /// picked cells when it closes.
+    data_link_cell_target: bool,
     pdf_shx_dialog: Option<crate::ui::window::pdf_shx_dialog::ShxSettingsState>,
     underlay_layers: Option<crate::ui::window::pdf_dialogs::UnderlayLayersState>,
     pdf_import_settings: Option<crate::modules::insert::pdf_import::PdfImportSettings>,
@@ -984,6 +1045,10 @@ pub(super) struct OpenCADStudio {
     auto_constrain_angle_input: String,
     pub constraint_solve_mode: bool,
     pub constraint_infer: bool,
+    /// How many `apply_cmd_result` frames are on the stack. A handler that
+    /// applies a follow-up result must not clear or drain the report its
+    /// caller is still filling.
+    result_depth: u32,
     pub constraint_bar_display: i16,
     /// DCFORM: new dimensional constraints use the annotational form.
     pub constraint_form_annotational: bool,
@@ -1209,6 +1274,7 @@ pub(super) struct OpenCADStudio {
     pub(crate) show_block_palette: bool,
     /// Authoring palette preference, visible only in a Block Editor session.
     show_authoring_palettes: bool,
+    show_parameters_manager: bool,
     authoring_palette_tab: crate::ui::window::authoring_palettes::Tab,
     /// Node graph overlay over the viewport.
     pub(crate) show_node_graph: bool,
@@ -1669,27 +1735,25 @@ pub(super) struct OpenCADStudio {
     tablestyle_selected: String,
     tablestyle_tab: u8,
     tablestyle_compare: String,
-    /// Edit buffers for the table style's general margins.
-    ts_hmargin: String,
-    ts_vmargin: String,
     /// General table-style description buffer.
     ts_description: String,
-    /// Per-cell edit buffers, indexed 0=Data, 1=Header, 2=Title.
-    /// Table cell colour field (row class, "textcolor"/"fillcolor") whose
-    /// expanded palette is open.
-    ts_color_open: Option<(u8, &'static str)>,
-    ts_cell_textstyle: [String; 3],
-    ts_cell_height: [String; 3],
-    ts_cell_textcolor: [String; 3],
-    ts_cell_fillcolor: [String; 3],
-    ts_cell_datatype: [String; 3],
-    ts_cell_unittype: [String; 3],
-    ts_cell_format: [String; 3],
-    /// Per-cell, per-border numeric buffers ([cell][border], border order:
-    /// 0=left 1=right 2=top 3=bottom 4=horizontal-inside 5=vertical-inside).
-    ts_border_lw: [[String; 6]; 3],
-    ts_border_color: [[String; 6]; 3],
-    ts_border_spacing: [[String; 6]; 3],
+    /// The cell style being edited ("_DATA", "_HEADER", "_TITLE" or a
+    /// user cell style).
+    ts_cell: String,
+    /// Text buffers of the edited cell style: name (new / rename), text
+    /// height, text angle, margins and format.
+    ts_cell_name: String,
+    ts_cell_height: String,
+    ts_cell_angle: String,
+    ts_cell_hmargin: String,
+    ts_cell_vmargin: String,
+    ts_cell_format: String,
+    /// Double-line spacing buffers of its six edges (top, inside
+    /// horizontal, bottom, left, inside vertical, right).
+    ts_edge_spacing: [String; 6],
+    /// Colour field ("textcolor" / "fillcolor") whose expanded palette is
+    /// open.
+    ts_color_open: Option<&'static str>,
 
     // ── Shared style-manager inline rename ────────────────────────────────
     /// Original name of the style currently being renamed inline (double-click
@@ -1707,20 +1771,22 @@ pub(super) struct OpenCADStudio {
 
     // ── TextStyle Font Browser ────────────────────────────────────────────
     textstyle_selected: String,
-    textstyle_tab: u8,
+    /// How many texts use each text style (ASCII-lowercase name), counted
+    /// with the selected style's texts.
+    textstyle_counts: rustc_hash::FxHashMap<String, usize>,
+    /// The list shows only the styles in use.
+    textstyle_in_use_only: bool,
+    /// The preview's sample text; empty shows the default.
+    textstyle_sample: String,
     textstyle_compare: String,
-    /// Edit buffer for font file name.
-    textstyle_font: String,
-    /// Edit buffer for width factor.
-    textstyle_width: String,
-    /// Edit buffer for oblique angle (degrees).
-    textstyle_oblique: String,
-    /// Edit buffer for fixed text height (0 = variable).
-    textstyle_height: String,
-    /// Edit buffer for big-font file name.
-    textstyle_bigfont: String,
-    /// Edit buffer for TrueType font name.
-    textstyle_ttf: String,
+    /// Working copy of the selected style; written into the document before
+    /// any list operation and on Apply.
+    textstyle_draft: text_style_draft::TextStyleDraft,
+    textstyle_font_picker: crate::ui::font_picker::FontPickerState,
+    /// The texts of every text style (ASCII-lowercase name), for "Where
+    /// used" and the summary before Apply. Texts do not change while the
+    /// manager is open; Apply walks the drawing again.
+    textstyle_users: rustc_hash::FxHashMap<String, Vec<text_style_users::TextUser>>,
 
     // ── Color Scheme ──────────────────────────────────────────────────────
     active_theme: Theme,
@@ -2205,7 +2271,7 @@ pub enum ColorPickTarget {
     GraphicAttributesSolid,
     DimStyle(DsField),
     MLeader(&'static str),
-    Table(u8, &'static str),
+    Table(&'static str),
     /// Plot-style colour override for the currently selected ACI entry.
     PlotStyle,
     /// Selected entities' colour (left properties panel).
@@ -2218,6 +2284,8 @@ pub enum ColorPickTarget {
     PropertiesField(String),
     /// Current creation colour (ribbon).
     Ribbon,
+    /// The ribbon's displayed layer, independent of Layer Manager selection.
+    RibbonLayer(String),
     /// A layer's colour, by layer name.
     Layer(String),
     /// A layer's colour override in one layout viewport.
@@ -2876,6 +2944,11 @@ pub enum ModalKind {
     RefEdit,
     PdfPassword,
     DimInspect,
+    TableCellBorders,
+    TableCellContents,
+    TableCellBlock,
+    TableCellFormat,
+    TableCellWarning,
     PdfShxSettings,
     UnderlayLayers,
     PdfImportSettings,
@@ -2888,6 +2961,7 @@ pub enum ModalKind {
     GeometricTolerance,
     AttDef,
     AttDefEdit,
+    InsertAttributes,
     /// Block Attribute Manager (BATTMAN / ATTMAN).
     AttMan,
     CountInvalidArea,
@@ -3561,6 +3635,8 @@ pub enum Message {
     /// space separates the answers to the command's prompts, as in a menu
     /// macro, and no Enter follows the last one.
     MenuCommand(String),
+    /// The Quick Access Toolbar's lists and menus.
+    RibbonQat(crate::ui::ribbon::QatMsg),
     /// The minimize button and the minimized ribbon's popups.
     RibbonMinimize(crate::ui::ribbon::MinimizeMsg),
     /// The pointer and pins of the ribbon's slide-outs.
@@ -3575,6 +3651,16 @@ pub enum Message {
         module: &'static str,
         titles: Vec<String>,
     },
+    /// A ribbon panel dropped off the ribbon: it floats with its top-left
+    /// corner at (`x`, `y`).
+    RibbonFloatPanel {
+        module: &'static str,
+        title: String,
+        x: f32,
+        y: f32,
+    },
+    /// A floating ribbon panel: pressed, moved, released.
+    RibbonFloat(crate::ui::ribbon::FloatMsg),
     /// Ribbon key tips: Alt, typed codes and Esc.
     KeyTip(crate::ui::ribbon::KeyTipInput),
     /// A ribbon tool button was clicked — highlights the tool and dispatches its event.
@@ -3668,6 +3754,18 @@ pub enum Message {
     BlockVisibility(crate::ui::window::block_visibility::Action),
     BlockLookup(crate::ui::window::block_lookup::Action),
     BlockPropertiesTable(crate::ui::window::block_properties_table::Action),
+    // ── Parameters Manager ──────────────────────────────────────────────
+    /// The operator clicked a row's numeric cell: the field opens on that row.
+    ParametersManagerEdit(String, crate::ui::window::parameters_manager::Cell),
+    ParametersManagerInput(String),
+    ParametersManagerFilter(String),
+    ParametersManagerSearch(String),
+    ParametersManagerCommit,
+    /// The widget focused after a click while a manager cell is open. A click
+    /// off the field commits what was typed, as Enter does.
+    ParametersManagerFocus(Option<iced::widget::Id>),
+    /// The row's Show cell, which is the parameter's own visibility flag.
+    ParametersManagerShow(String),
     BlockEditPickerName(String),
     BlockEditPickerSelect(String),
     BlockEditPickerApply,
@@ -4437,6 +4535,10 @@ pub enum Message {
     LayerManagerFilterChanged(String),
     /// User changed the active color in the Properties toolbar.
     RibbonColorChanged(AcadColor),
+    RibbonLayerColorChanged {
+        layer: String,
+        color: AcadColor,
+    },
     /// Toggle the full ACI palette inside the ribbon color picker.
     RibbonColorPaletteToggle,
     /// User changed the active linetype in the Properties toolbar.
@@ -4864,8 +4966,21 @@ pub enum Message {
     MTextHeight(String),
     /// Toolbar text-style dropdown changed.
     MTextStyle(String),
-    /// Toolbar font dropdown changed.
-    MTextFont(String),
+    /// The toolbar font picker: open, search or pick.
+    MTextFontPicker(crate::ui::font_picker::FontPickerEvent),
+    /// "Reset to style" on a first-row field (font, height, width, oblique).
+    MTextResetToStyle(&'static str),
+    /// Style menu: open the name of a new style from the selection, or from
+    /// its Cancel go back.
+    MTextNewStyleOpen,
+    /// Style menu: the new style's name, as typed.
+    MTextNewStyleName(String),
+    /// Style menu: make the new style from the selection.
+    MTextNewStyleCreate,
+    /// Style menu: update the text's style from the selection.
+    MTextUpdateStyleFromSelection,
+    /// Style menu: open the Text Style Manager on the text's style.
+    MTextStyleManager,
     /// Toolbar oblique-angle field changed.
     MTextOblique(String),
     /// Toolbar width-factor field changed.
@@ -4943,7 +5058,7 @@ pub enum Message {
     /// Toolbar paragraph-alignment change.
     MTextAlign(mtext_editor::ParaAlign),
     /// Toolbar line-spacing change.
-    MTextLineSpacing(f32),
+    MTextLineSpacing(f64),
     /// Switch the editor body between raw code input (`false`) and the
     /// rendered preview (`true`).
     MTextShowPreview(bool),
@@ -5131,7 +5246,10 @@ pub enum Message {
     #[allow(dead_code)]
     TextStyleDialogClose,
     TextStyleDialogSelect(String),
-    TextStyleDialogTab(u8),
+    /// "Styles in use": show only the styles texts use.
+    TextStyleInUseFilter(bool),
+    /// The preview's sample text, as typed.
+    TextStyleSample(String),
     TextStyleDialogCompare(String),
     TextStyleDialogSetCurrent,
     TextStyleDialogNew,
@@ -5157,8 +5275,10 @@ pub enum Message {
     },
     /// Commit edits to the selected text style.
     TextStyleApply,
-    /// Select a font from the built-in font list.
-    TextStyleFontPick(String),
+    /// The font picker: open, search or pick a stroke or TrueType font.
+    TextStyleFont(crate::ui::font_picker::FontPickerEvent),
+    /// Pick the TrueType face: regular, bold, italic or both.
+    TextStyleFaceStyle(crate::ui::font_picker::FaceStyle),
     /// Flip a boolean flag on the selected text style (backward / upside_down /
     /// vertical / annotative), applied immediately.
     TextStyleToggle(&'static str),
@@ -5179,50 +5299,44 @@ pub enum Message {
     /// Toggle a boolean flag (title_suppressed / header_suppressed / flow) on
     /// the selected table style.
     TableStyleToggle(&'static str),
-    /// Update a general edit buffer (hmargin / vmargin).
+    /// Update a general edit buffer (description).
     TableStyleEdit {
         field: &'static str,
         value: String,
     },
     /// Write the general edit buffers back into the selected table style.
     TableStyleApply,
-    /// Update a per-cell edit buffer (row 0=Data,1=Header,2=Title).
+    /// Edit the named cell style.
+    TableStyleCellSelect(String),
+    /// Add a cell style (named by the name buffer) copying the edited one.
+    TableStyleCellNew,
+    /// Rename the edited user cell style to the name buffer.
+    TableStyleCellRename,
+    /// Delete the edited user cell style.
+    TableStyleCellDelete,
+    /// A field of the edited cell style: a text buffer ("name", "height",
+    /// "angle", "hmargin", "vmargin", "format") or a choice ("align",
+    /// "class", "datatype", "textstyle", "textcolor", "fillcolor",
+    /// "merge").
     TableStyleCellEdit {
-        row: u8,
         field: &'static str,
         value: String,
     },
-    /// Toggle the expanded colour palette for a table cell colour field.
-    TableColorMore(u8, &'static str),
-    /// Toggle background fill on a cell style.
-    TableStyleCellToggleFill(u8),
-    /// Set the alignment of a cell style from the dropdown.
-    TableStyleCellSetAlign {
-        row: u8,
+    /// A field ("visible", "lw", "linetype", "color", "double",
+    /// "spacing") of one edge of the edited cell style.
+    TableStyleEdgeEdit {
+        edge: u8,
+        field: &'static str,
         value: String,
     },
-    /// Write a cell's edit buffers back into the selected table style.
-    TableStyleCellApply(u8),
+    /// Toggle the expanded colour palette of a cell colour field.
+    TableColorMore(&'static str),
     /// Set the table flow direction from the dropdown.
     TableStyleSetFlow(String),
-    /// Update a per-cell, per-border numeric edit buffer.
-    TableStyleBorderEdit {
-        cell: u8,
-        border: u8,
-        field: &'static str,
-        value: String,
-    },
-    /// Set a border's line type (Single / Double).
-    TableStyleBorderSetType {
-        cell: u8,
-        border: u8,
-        value: String,
-    },
-    /// Toggle a border's visibility.
-    TableStyleBorderToggleInvisible {
-        cell: u8,
-        border: u8,
-    },
+    /// Pick a table in the drawing as the style's starting table.
+    TableStyleTemplatePick,
+    /// Drop the style's starting table.
+    TableStyleTemplateRemove,
     // ── MLineStyle Dialog ─────────────────────────────────────────────────
     MlStyleDialogOpen,
     #[allow(dead_code)]
@@ -5355,6 +5469,7 @@ pub enum Message {
     /// An edit in one of the PDF dialogs.
     PdfDialog(crate::ui::window::pdf_dialogs::PdfDialogMsg),
     AttdefDialog(crate::ui::window::attdef_dialog::AttdefDialogMsg),
+    InsertAttrDialog(crate::ui::window::insert_attr_dialog::InsertAttrMsg),
     /// Block Attribute Manager edits.
     AttMan(crate::ui::window::attman_dialog::AttManMsg),
     FieldDialog(crate::ui::window::field_dialog::FieldDialogMsg),
@@ -5364,6 +5479,8 @@ pub enum Message {
     PdfPassword(crate::ui::window::pdf_password_dialog::PdfPasswordMsg),
     /// An edit in the Inspection Dimension window.
     DimInspect(crate::ui::window::dim_inspect_dialog::DimInspectMsg),
+    /// An edit in a picked table cell window (Cell Borders, Cell Contents).
+    TableCellDialog(crate::ui::window::table_cell_dialog::TableCellDialogMsg),
     HyperlinkDialog(crate::ui::window::hyperlink_dialog::HyperlinkMsg),
     /// Check Spelling window.
     Spell(crate::ui::window::spell_dialog::SpellMsg),
@@ -5637,6 +5754,7 @@ impl OpenCADStudio {
             pdf_attach: None,
             point_cloud_attach: None,
             attdef_dialog: None,
+            insert_attr_dialog: None,
             attman: None,
             attdef_edit: None,
             field_dialog: None,
@@ -5647,6 +5765,12 @@ impl OpenCADStudio {
             refedit_dialog: None,
             pdf_password: None,
             dim_inspect_dialog: None,
+            table_cell_borders: None,
+            table_cell_contents: None,
+            table_cell_block: None,
+            table_cell_format: None,
+            table_cell_warning: None,
+            data_link_cell_target: false,
             pdf_shx_dialog: None,
             underlay_layers: None,
             pdf_import_settings: None,
@@ -5755,6 +5879,7 @@ impl OpenCADStudio {
             auto_constrain_angle_input: "1".to_string(),
             constraint_solve_mode: true,
             constraint_infer: false,
+            result_depth: 0,
             constraint_bar_display: 3,
             constraint_form_annotational: false,
             dim_constraint_last: "Aligned",
@@ -5835,6 +5960,7 @@ impl OpenCADStudio {
             graphic_attributes: Default::default(),
             show_block_palette: false,
             show_authoring_palettes: false,
+            show_parameters_manager: false,
             authoring_palette_tab: Default::default(),
             show_node_graph: false,
             property_target_override: None,
@@ -6118,32 +6244,27 @@ impl OpenCADStudio {
             style_stage: None,
             style_import: None,
             textstyle_selected: "Standard".to_string(),
-            textstyle_tab: 0,
+            textstyle_counts: Default::default(),
+            textstyle_in_use_only: false,
+            textstyle_sample: String::new(),
             textstyle_compare: String::new(),
-            textstyle_font: String::new(),
-            textstyle_width: "1.0".to_string(),
-            textstyle_oblique: "0.0".to_string(),
-            textstyle_height: "0.0".to_string(),
-            textstyle_bigfont: String::new(),
-            textstyle_ttf: String::new(),
+            textstyle_draft: Default::default(),
+            textstyle_font_picker: Default::default(),
+            textstyle_users: Default::default(),
             // TableStyle dialog
             tablestyle_selected: "Standard".to_string(),
             tablestyle_tab: 0,
             tablestyle_compare: String::new(),
-            ts_hmargin: "1.5".to_string(),
-            ts_vmargin: "1.5".to_string(),
             ts_description: String::new(),
+            ts_cell: codec::objects::DATA_CELL_STYLE.to_string(),
+            ts_cell_name: String::new(),
+            ts_cell_height: String::new(),
+            ts_cell_angle: String::new(),
+            ts_cell_hmargin: String::new(),
+            ts_cell_vmargin: String::new(),
+            ts_cell_format: String::new(),
+            ts_edge_spacing: Default::default(),
             ts_color_open: None,
-            ts_cell_textstyle: Default::default(),
-            ts_cell_height: Default::default(),
-            ts_cell_textcolor: Default::default(),
-            ts_cell_fillcolor: Default::default(),
-            ts_cell_datatype: Default::default(),
-            ts_cell_unittype: Default::default(),
-            ts_cell_format: Default::default(),
-            ts_border_lw: Default::default(),
-            ts_border_color: Default::default(),
-            ts_border_spacing: Default::default(),
             // MLineStyle dialog
             mlstyle_selected: "Standard".to_string(),
             mlstyle_tab: 0,

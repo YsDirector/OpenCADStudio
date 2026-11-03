@@ -95,6 +95,131 @@ fn feed(app: &mut OpenCADStudio, text: &str) {
     let _ = app.update(Message::CommandSubmit);
 }
 
+/// Author one attribute definition through the command line, the way an
+/// operator in the block editor does: modes, tag, prompt, default, then the
+/// place, height and rotation it is put at. The command keeps its modes in
+/// process-wide state and its last placed definition per drawing, so the run
+/// starts from the defaults a fresh drawing has and puts that state back as it
+/// found it; otherwise whichever test ran last would write the prompts this
+/// one answers.
+fn author_attribute(app: &mut OpenCADStudio, tag: &str) {
+    use crate::modules::draw::draw::attdef::{session, AttdefSession, AFLAG_LOCK};
+    let remembered = {
+        let mut live = session();
+        let remembered = AttdefSession {
+            aflags: live.aflags,
+            annotative: live.annotative,
+            last: live.last.clone(),
+            on_screen: live.on_screen,
+            editor_value: live.editor_value.clone(),
+        };
+        *live = AttdefSession {
+            aflags: AFLAG_LOCK,
+            annotative: false,
+            last: Vec::new(),
+            on_screen: true,
+            editor_value: None,
+        };
+        remembered
+    };
+    let i = app.active_tab;
+    let _ = app.dispatch_command("-ATTDEF");
+    feed(app, ""); // modes: done
+    feed(app, tag);
+    feed(app, "prompt text");
+    feed(app, ""); // default value
+    feed(app, ""); // single line
+    feed(app, "0,5");
+    feed(app, "2");
+    feed(app, "0");
+    app.finish_pending_history(i);
+    *session() = remembered;
+}
+
+fn definition_is_attributed(app: &OpenCADStudio) -> Option<bool> {
+    app.tabs[app.active_tab]
+        .scene
+        .document
+        .block_records
+        .get("EDIT_ME")
+        .map(|record| record.flags.has_attributes)
+}
+
+/// What the written file says about the edited definition, read back from it.
+fn written_attribute_marker(app: &OpenCADStudio, extension: &str) -> Option<bool> {
+    let document = &app.tabs[app.active_tab].scene.document;
+    let bytes = crate::io::save_to_bytes(document, extension, document.version)
+        .unwrap_or_else(|error| panic!("save {extension}: {error}"));
+    let reloaded = crate::io::load_bytes(&format!("editor.{extension}"), bytes)
+        .unwrap_or_else(|error| panic!("load {extension}: {error}"));
+    reloaded
+        .block_records
+        .get("EDIT_ME")
+        .map(|record| record.flags.has_attributes)
+}
+
+#[test]
+fn an_attribute_authored_in_the_editor_marks_the_definition_attributed() {
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    assert_eq!(
+        definition_is_attributed(&app),
+        Some(false),
+        "a definition with no attribute says so"
+    );
+    author_attribute(&mut app, "TAG1");
+    assert_eq!(
+        definition_is_attributed(&app),
+        Some(true),
+        "the record advertises the attribute its body now holds"
+    );
+    let _ = app.dispatch_command("BSAVE");
+    assert_eq!(
+        definition_is_attributed(&app),
+        Some(true),
+        "saving keeps the definition attributed"
+    );
+    for extension in ["dxf", "dwg"] {
+        assert_eq!(
+            written_attribute_marker(&app, extension),
+            Some(true),
+            "{extension}: the written record does not advertise the authored attribute"
+        );
+    }
+    let _ = app.dispatch_command("BCLOSE");
+}
+
+#[test]
+fn saving_after_the_authored_attribute_is_erased_unmarks_the_definition() {
+    let (mut app, reference) = fixture();
+    let i = app.active_tab;
+    begin(&mut app, reference);
+    author_attribute(&mut app, "TAG1");
+    assert_eq!(
+        definition_is_attributed(&app),
+        Some(true),
+        "the attribute is on the record before it is erased"
+    );
+    let attribute = *members(&app).last().unwrap();
+    app.push_undo_snapshot(i, "Erase attribute");
+    app.tabs[i].scene.erase_entities(&[attribute]);
+    app.finish_pending_history(i);
+    let _ = app.dispatch_command("BSAVE");
+    assert_eq!(
+        definition_is_attributed(&app),
+        Some(false),
+        "the body holds no attribute, so neither does the record"
+    );
+    for extension in ["dxf", "dwg"] {
+        assert_eq!(
+            written_attribute_marker(&app, extension),
+            Some(false),
+            "{extension}: the written record still advertises an attribute the body lost"
+        );
+    }
+    let _ = app.dispatch_command("BCLOSE");
+}
+
 fn edit_action_set(app: &mut OpenCADStudio, action: Handle, mode: &str, targets: Vec<Handle>) {
     let _ = app.dispatch_command("BACTIONBARMODE 0");
     app.tabs[app.active_tab].selected_authoring = Some(action);
@@ -263,6 +388,24 @@ fn block_construction_command_history_display_cancel_and_stale_session() {
     assert!(app.tabs[i].active_cmd.is_none());
     assert!(construction::is_construction(app.tabs[i].scene.document.get_entity(handles[0]).unwrap().common()));
     assert_eq!(app.tabs[i].history.undo_stack.len(), depth + 1);
+    let assert_history_label = |app: &OpenCADStudio, redo: bool| {
+        let history = &app.tabs[app.active_tab].history;
+        let stack = if redo { &history.redo_stack } else { &history.undo_stack };
+        let snapshot = stack.last().unwrap();
+        assert_eq!(snapshot.label(), "Edit construction geometry");
+        assert!(matches!(snapshot,
+            super::document::HistorySnapshot::Delta(delta)
+                if matches!(delta.label, super::document::HistoryLabel::Message(_))));
+        let expected = crate::t!("Edit construction geometry").into_owned();
+        assert_eq!(super::history::history_dropdown_labels(stack).first(), Some(&expected));
+        let crate::ui::popup::context_menu::MenuContext::Idle { undo_label, redo_label, .. } =
+            app.context_menu_context()
+        else {
+            panic!("construction command must leave an idle context menu");
+        };
+        assert_eq!(if redo { redo_label } else { undo_label }, Some(expected));
+    };
+    assert_history_label(&app, false);
     let changed = app.tabs[i].scene.document.clone();
     for command in ["BCONSTRUCTION HIDE", "BCONSTRUCTION SHOW ALL"] {
         let _ = app.dispatch_command(command);
@@ -283,10 +426,12 @@ fn block_construction_command_history_display_cancel_and_stale_session() {
     let _ = app.dispatch_command("BCONSTRUCTION REVERT");
     assert!(!construction::is_construction(app.tabs[i].scene.document.get_entity(handles[0]).unwrap().common()));
     app.undo_steps(1);
+    assert_history_label(&app, true);
     assert!(construction::is_construction(app.tabs[i].scene.document.get_entity(handles[0]).unwrap().common()));
     app.undo_steps(1);
     assert!(!construction::is_construction(app.tabs[i].scene.document.get_entity(handles[0]).unwrap().common()));
     app.redo_steps(2);
+    assert_history_label(&app, false);
     assert!(!construction::is_construction(app.tabs[i].scene.document.get_entity(handles[0]).unwrap().common()));
     let _ = app.dispatch_command("BEDIT_DISCARD");
     let closed = app.tabs[i].scene.document.clone();
@@ -836,6 +981,7 @@ fn block_actions_set_frame_cancel_stale_and_context_guards() {
         definition: def,
         action,
         expected: expected.clone(),
+        point_choices: None,
         targets: targets.clone(),
         frame: None,
         rotate_only: None,
@@ -855,6 +1001,7 @@ fn block_actions_set_frame_cancel_stale_and_context_guards() {
         definition: def,
         action,
         expected,
+        point_choices: None,
         targets,
         frame: None,
         rotate_only: None,
@@ -1861,7 +2008,7 @@ fn linear_parameter_value_set_is_editable_and_undoable_in_properties() {
         .flat_map(|section| section.props.iter())
         .map(|property| property.field)
         .collect::<Vec<_>>();
-    assert!(fields.contains(&"authoring_chain_actions_state"));
+    assert!(fields.contains(&"authoring_chain_actions"));
     assert!(fields.contains(&"authoring_set_linear_distance_minimum"));
     assert!(fields.contains(&"authoring_set_linear_distance_maximum"));
     assert!(fields.contains(&"authoring_set_linear_distance_increment"));
@@ -1889,6 +2036,117 @@ fn linear_parameter_value_set_is_editable_and_undoable_in_properties() {
     assert_eq!(parameter_data.value_set.values, vec![2.0, 4.0, 8.0]);
     assert_eq!(parameter_data.value_set.flags, 11);
     assert_eq!(app.tabs[i].history.undo_stack.len(), undo_depth + 4);
+}
+
+/// The flag that says a parameter's actions run one after the other is the only
+/// record of the order the operator chose, so the panel has to answer to it both
+/// ways: the row reads the bit off the record, clicking it writes the record, and
+/// undoing puts the bit back without disturbing anything else the parameter holds.
+#[test]
+fn the_chain_actions_row_toggles_the_parameter_and_undoes() {
+    use crate::scene::block_actions::{self as actions, Kind};
+    use crate::scene::model::object::PropValue;
+    use codec::objects::{DynamicBlockData, ObjectType};
+
+    fn linear(
+        app: &OpenCADStudio,
+        tab: usize,
+        parameter: Handle,
+    ) -> &codec::objects::BlockLinearParameter {
+        let ObjectType::DynamicBlock(object) = &app.tabs[tab].scene.document.objects[&parameter]
+        else {
+            panic!("expected a dynamic parameter")
+        };
+        let DynamicBlockData::LinearParameter(data) = &object.data else {
+            panic!("expected a Linear parameter")
+        };
+        data
+    }
+    fn chained(app: &OpenCADStudio, tab: usize, parameter: Handle) -> bool {
+        linear(app, tab, parameter)
+            .parameter
+            .parameter
+            .chain_actions
+    }
+    // The distance limits are the part of the record the toggle must not disturb.
+    fn limits(app: &OpenCADStudio, tab: usize, parameter: Handle) -> (f64, f64) {
+        let set = &linear(app, tab, parameter).value_set;
+        (set.minimum, set.maximum)
+    }
+    let row = |app: &mut OpenCADStudio| {
+        app.refresh_properties();
+        app.tabs[app.active_tab]
+            .properties
+            .sections
+            .iter()
+            .flat_map(|section| section.props.iter())
+            .find(|property| property.field == "authoring_chain_actions")
+            .cloned()
+            .expect("the parameter has a Chain actions row")
+    };
+
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    let i = app.active_tab;
+    let _ = app.run_command_line("BPARAMETER LINEAR 0,0 6,0 3,2");
+    let definition = app.tabs[i].active_block_edit_session().unwrap().br_handle;
+    let parameter =
+        actions::parameters(&app.tabs[i].scene.document, definition, Kind::Move)[0].handle;
+    app.tabs[i].selected_authoring = Some(parameter);
+    let _ = app.update(Message::PropGeomInput {
+        field: "authoring_set_linear_distance_maximum",
+        value: "20".into(),
+    });
+    let _ = app.update(Message::PropGeomCommit(
+        "authoring_set_linear_distance_maximum",
+    ));
+    let limits_before = limits(&app, i, parameter);
+    let graph_before = actions::actions(&app.tabs[i].scene.document, definition).len();
+    let depth = app.tabs[i].history.undo_stack.len();
+
+    assert_eq!(
+        chained(&app, i, parameter),
+        false,
+        "a fresh parameter is not chained"
+    );
+    let PropValue::BoolToggle { value, .. } = row(&mut app).value else {
+        panic!("the Chain actions row is not a toggle")
+    };
+    assert_eq!(value, false, "the row reads the bit off the record");
+
+    let _ = app.update(Message::PropBoolToggle("authoring_chain_actions"));
+    assert_eq!(
+        chained(&app, i, parameter),
+        true,
+        "clicking the row writes the chaining bit into the record"
+    );
+    let PropValue::BoolToggle { value, .. } = row(&mut app).value else {
+        panic!("the Chain actions row is not a toggle")
+    };
+    assert_eq!(value, true, "the row reads back what was written");
+    assert_eq!(app.tabs[i].history.undo_stack.len(), depth + 1);
+    assert_eq!(
+        limits(&app, i, parameter),
+        limits_before,
+        "only the bit moves"
+    );
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        chained(&app, i, parameter),
+        false,
+        "undoing the toggle leaves the parameter unchained"
+    );
+    assert_eq!(
+        limits(&app, i, parameter),
+        limits_before,
+        "undo moves the bit alone"
+    );
+    assert_eq!(
+        actions::actions(&app.tabs[i].scene.document, definition).len(),
+        graph_before,
+        "the evaluation graph is unchanged by a chaining toggle"
+    );
 }
 
 #[test]
@@ -2511,6 +2769,7 @@ fn block_actions_rejected_outside_editor_preserve_running_command_and_stale_resu
         kind: Kind::Move,
         parameter: p,
         xy_key_point: None,
+        point_choices: None,
         targets: members(&app),
         location: glam::DVec3::ZERO,
         frame: None,
@@ -2695,7 +2954,7 @@ fn lookup_basepoint_placement_history_test_block_and_saved_parent_undo() {
     );
     app.redo_steps(1);
     let _ = app.dispatch_command("BPARAMETER");
-    feed(&mut app, "K");
+    feed(&mut app, "lookup");
     feed(&mut app, "2,2");
     feed(&mut app, "");
     assert_eq!(
@@ -2732,6 +2991,52 @@ fn lookup_basepoint_placement_history_test_block_and_saved_parent_undo() {
     assert!(block_basepoint::parameter(&app.tabs[i].scene.document, definition).is_none());
     app.redo_steps(1);
     assert!(block_basepoint::parameter(&app.tabs[i].scene.document, definition).is_some());
+}
+
+/// The insertion grip is the marker on its own until the definition carries a
+/// basepoint parameter; only then does it earn the `Basepoint` caption, because
+/// a permanent caption on the origin marker reads as a parameter nobody authored.
+#[test]
+fn the_basepoint_caption_appears_only_with_a_basepoint_parameter() {
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    let i = app.active_tab;
+    let definition = app.tabs[i].active_block_edit_session().unwrap().br_handle;
+    let origin = Vector3::new(0.0, 0.0, 0.0);
+    let marker = crate::scene::block_basepoint::marker_graphic(
+        &app.tabs[i].scene.document,
+        definition,
+        origin,
+    );
+    assert_eq!(
+        marker.base_grips,
+        vec![origin],
+        "the insertion grip is drawn either way"
+    );
+    assert!(
+        marker.labels.is_empty(),
+        "the plain insertion grip carries no caption"
+    );
+    let _ = app.run_command_line("BPARAMETER BASEPOINT 3,4");
+    let anchor = crate::scene::block_basepoint::parameter(&app.tabs[i].scene.document, definition)
+        .unwrap()
+        .1
+        .point;
+    let marker = crate::scene::block_basepoint::marker_graphic(
+        &app.tabs[i].scene.document,
+        definition,
+        anchor,
+    );
+    assert_eq!(
+        marker.base_grips,
+        vec![anchor],
+        "a definition with a basepoint parameter still draws its grip"
+    );
+    assert_eq!(
+        marker.labels,
+        vec![(anchor, "Basepoint".to_string())],
+        "a definition that carries a basepoint parameter captions its grip"
+    );
 }
 
 fn lookup_editor_fixture() -> (OpenCADStudio, Handle, Handle) {
@@ -3560,13 +3865,19 @@ fn xy_parameter_prompts_for_grip_count_and_places_an_automatic_label() {
         "{prompt}"
     );
     let before = app.tabs[i].scene.document.clone();
-    for invalid in ["3", "-1", "five", "1,8"] {
+    for (invalid, reason) in [
+        ("3", "Enter the number of grips: 0, 1, 2 or 4."),
+        ("-1", "Enter the number of grips: 0, 1, 2 or 4."),
+        ("five", "Requires an integer value."),
+        ("1,8", "Requires an integer value."),
+        ("2.5", "Requires an integer value."),
+    ] {
         app.command_line.last_error = None;
         feed(&mut app, invalid);
         assert_eq!(app.tabs[i].scene.document, before);
         assert_eq!(
             app.command_line.last_error.as_deref(),
-            Some("Enter the number of grips: 0, 1, 2 or 4."),
+            Some(reason),
             "{invalid}"
         );
         assert!(app.tabs[i].active_cmd.is_some());
@@ -5677,16 +5988,7 @@ fn attdef_inside_session_lands_in_the_definition_and_undo_stays_local() {
     let depth = main_depth(&app);
     begin(&mut app, reference);
     assert_eq!(members(&app).len(), 1);
-    let _ = app.dispatch_command("-ATTDEF");
-    feed(&mut app, ""); // modes: done
-    feed(&mut app, "TAG1");
-    feed(&mut app, "prompt text");
-    feed(&mut app, ""); // default value
-    feed(&mut app, ""); // single line
-    feed(&mut app, "0,5");
-    feed(&mut app, "2");
-    feed(&mut app, "0");
-    app.finish_pending_history(i);
+    author_attribute(&mut app, "TAG1");
     let after = members(&app);
     assert_eq!(after.len(), 2, "the ATTDEF joins the definition");
     assert!(
@@ -6632,6 +6934,117 @@ fn block_action_overrides_properties_are_atomic_and_locally_undoable() {
     let before=app.tabs[i].scene.document.clone();
     let _=app.update(Message::PropGeomCommit("authoring_action_multiplier"));
     assert_eq!(app.tabs[i].scene.document,before);
+}
+
+#[test]
+fn the_chain_actions_row_is_offered_only_where_the_actions_run() {
+    use crate::scene::block_actions::{self as actions, Kind};
+    use crate::scene::block_orientation_parameter::{self as orientation, Kind as OrientationKind};
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    let i = app.active_tab;
+    let definition = app.tabs[i].active_block_edit_session().unwrap().br_handle;
+    let _ = app.run_command_line("BPARAMETER LINEAR 0,0 10,0 5,2");
+    let linear = actions::parameters(&app.tabs[i].scene.document, definition, Kind::Move)[0].handle;
+    let _ = app.run_command_line("BPARAMETER ALIGNMENT 0,0 TYPE P 10,0");
+    let alignment = orientation::parameters(&app.tabs[i].scene.document, definition)
+        .into_iter()
+        .find(|p| p.kind == OrientationKind::Alignment)
+        .unwrap()
+        .handle;
+    let chained_row = |app: &OpenCADStudio| {
+        app.tabs[i]
+            .properties
+            .sections
+            .iter()
+            .flat_map(|s| &s.props)
+            .any(|p| p.field == "authoring_chain_actions")
+    };
+    let show = |app: &mut OpenCADStudio, handle| {
+        app.tabs[i].selected_authoring = Some(handle);
+        app.refresh_properties();
+    };
+    show(&mut app, linear);
+    assert!(
+        chained_row(&app),
+        "a parameter whose actions run can chain them"
+    );
+    show(&mut app, alignment);
+    assert!(
+        !chained_row(&app),
+        "a parameter whose actions never run has no order to declare"
+    );
+    let before = app.tabs[i].scene.document.clone();
+    let _ = app.update(Message::PropBoolToggle("authoring_chain_actions"));
+    assert_eq!(
+        app.tabs[i].scene.document, before,
+        "the same click on that parameter writes nothing"
+    );
+    let _ = app.dispatch_command("BEDIT_DISCARD");
+}
+
+#[test]
+fn the_chain_row_records_the_action_whose_effect_runs_next() {
+    use crate::scene::block_actions::{self as actions, chain, Kind};
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    let i = app.active_tab;
+    let _ = app.run_command_line("BPARAMETER LINEAR 0,0 10,0 5,2");
+    let definition = app.tabs[i].active_block_edit_session().unwrap().br_handle;
+    let parameter = actions::all_parameters(&app.tabs[i].scene.document, definition)[0].handle;
+    let targets = members(&app);
+    let member = targets[0];
+    let move_action = actions::create(&mut app.tabs[i].scene.document, definition, Kind::Move, parameter, &targets, glam::DVec3::ZERO).unwrap();
+    let scale_action = actions::create(&mut app.tabs[i].scene.document, definition, Kind::Scale, parameter, &targets, glam::DVec3::ZERO).unwrap();
+    let name = |doc: &codec::Document, action: Handle| {
+        actions::actions(doc, definition)
+            .into_iter()
+            .find(|(handle, ..)| *handle == action)
+            .map(|(_, action, _, _)| action.element.name.clone())
+            .unwrap()
+    };
+    let move_name = name(&app.tabs[i].scene.document, move_action);
+    let fields = |app: &OpenCADStudio| app.tabs[i].properties.sections.iter().flat_map(|s| &s.props).map(|p| p.field).collect::<Vec<_>>();
+    let _ = app.update(Message::BlockActionBarSelect(parameter));
+    assert!(!fields(&app).contains(&"authoring_action_chain"), "a parameter has no chain to name");
+    let _ = app.update(Message::BlockActionBarSelect(scale_action));
+    assert!(fields(&app).contains(&"authoring_action_chain"));
+    assert_eq!(chain::label(&app.tabs[i].scene.document, definition, scale_action), Some(String::new()));
+    let before = app.tabs[i].scene.document.clone();
+    let depth = app.tabs[i].history.undo_stack.len();
+    // The parameter runs from ten to twenty units, so the move shifts the member
+    // ten along X and the scale doubles it about the origin it starts at.
+    let drive = |doc: &codec::Document| {
+        let baseline = doc.clone();
+        let mut driven = doc.clone();
+        actions::evaluate(&mut driven, &baseline, definition, parameter, glam::DVec3::new(20., 0., 0.)).unwrap();
+        let EntityType::Line(line) = driven.get_entity(member).unwrap() else {
+            panic!("the acted-on member is still a line")
+        };
+        (line.start.x, line.end.x)
+    };
+    let type_name = |app: &mut OpenCADStudio, value: &str| {
+        let _ = app.update(Message::PropGeomInput { field: "authoring_action_chain", value: value.into() });
+        app.update(Message::PropGeomCommit("authoring_action_chain"))
+    };
+    let _ = type_name(&mut app, "NoSuchAction");
+    assert_eq!(app.tabs[i].scene.document, before, "an unknown name chains nothing");
+    assert_eq!(app.tabs[i].history.undo_stack.len(), depth);
+    let _ = type_name(&mut app, &move_name);
+    assert_eq!(chain::label(&app.tabs[i].scene.document, definition, scale_action), Some(move_name.clone()));
+    let chained = app.tabs[i].scene.document.clone();
+    assert_eq!(app.tabs[i].history.undo_stack.len(), depth + 1);
+    assert_eq!(drive(&chained), (10., 12.), "the scale runs first and hands its result to the move");
+    assert_ne!(drive(&before), drive(&chained), "the chain the row records moves the geometry");
+    app.undo_steps(1);
+    assert_eq!(app.tabs[i].scene.document.objects[&scale_action], before.objects[&scale_action]);
+    app.redo_steps(1);
+    assert_eq!(app.tabs[i].scene.document.objects[&scale_action], chained.objects[&scale_action]);
+    let _ = type_name(&mut app, " ");
+    assert_eq!(chain::label(&app.tabs[i].scene.document, definition, scale_action), Some(String::new()));
+    assert_eq!(app.tabs[i].history.undo_stack.len(), depth + 2);
+    assert_eq!(drive(&app.tabs[i].scene.document), drive(&before), "clearing the row hands the order back");
+    let _ = app.dispatch_command("BEDIT_DISCARD");
 }
 
 #[test]
@@ -8032,6 +8445,91 @@ fn escape_reverts_a_pending_block_parameter_edit_and_keeps_the_selection() {
 }
 
 #[test]
+fn a_written_parameter_value_moves_the_reference_geometry() {
+    use crate::scene::model::object::{BlockParameterComponent as Component, PropValue};
+    use crate::scene::{block_actions as actions, block_distance_parameter as distance};
+    let (mut app, reference) = fixture();
+    begin(&mut app, reference);
+    let i = app.active_tab;
+    let def = app.tabs[i]
+        .active_block_edit_session()
+        .unwrap()
+        .br_handle;
+    let parameter = distance::create(
+        &mut app.tabs[i].scene.document,
+        def,
+        distance::Kind::Linear,
+        Vector3::ZERO,
+        Vector3::new(10., 0., 0.),
+        Vector3::UNIT_Y,
+    )
+    .unwrap();
+    let target = members(&app)[0];
+    actions::create(
+        &mut app.tabs[i].scene.document,
+        def,
+        actions::Kind::Move,
+        parameter,
+        &[target],
+        glam::DVec3::ZERO,
+    )
+    .unwrap();
+    let _ = app.dispatch_command("BSAVE");
+    let _ = app.dispatch_command("BCLOSE");
+    let i = app.active_tab;
+    app.tabs[i].scene.select_entity(reference, true);
+    app.tabs[i].selected_handle = Some(reference);
+    app.refresh_properties();
+    let field = app.tabs[i]
+        .properties
+        .sections
+        .iter()
+        .flat_map(|section| &section.props)
+        .find_map(|property| match property.value {
+            PropValue::BlockNumber { key, .. } if key.component == Component::Distance => Some(key),
+            _ => None,
+        })
+        .unwrap();
+    let starts = |doc: &codec::Document| {
+        doc.entities()
+            .filter_map(|entity| match entity {
+                codec::EntityType::Line(line) => Some(line.start),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = starts(&app.tabs[i].scene.document);
+    let _ = app.update(Message::PropBlockInput {
+        key: field,
+        value: "40".into(),
+    });
+    let _ = app.update(Message::PropBlockCommit(field));
+    let after = starts(&app.tabs[i].scene.document);
+    let moved = |points: &[Vector3]| {
+        points
+            .iter()
+            .any(|p| (p.x - 30.).abs() < 1e-9 && p.y.abs() < 1e-9)
+    };
+    assert!(
+        !moved(&before),
+        "nothing starts 30 along the parameter before the value is written"
+    );
+    assert!(
+        moved(&after),
+        "the written value moved a copy of the member 30 along the parameter"
+    );
+    let definition_member = match app.tabs[i].scene.document.get_entity(target) {
+        Some(codec::EntityType::Line(line)) => line.start,
+        other => panic!("the definition member is not a plain line: {other:?}"),
+    };
+    assert_eq!(
+        definition_member,
+        Vector3::ZERO,
+        "editing one reference leaves the definition's own member where it was authored"
+    );
+}
+
+#[test]
 fn block_reference_properties_keys_do_not_retarget_other_selections() {
     use crate::scene::model::object::PropValue;
     use crate::scene::{block_actions as actions, block_distance_parameter as distance};
@@ -8435,3 +8933,6 @@ mod parameter_preview;
 mod lookup_expressions;
 mod array_spacing_prompts;
 mod lookup_set_row;
+mod visibility_set_first_state;
+mod parameter_type_prompts;
+mod parameters_manager;

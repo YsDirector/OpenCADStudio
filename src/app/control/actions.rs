@@ -158,8 +158,12 @@ pub(super) const NAMES: &[&str] = &[
     "refedit_dialog",
     "pdf_password_dialog",
     "dim_inspect_dialog",
+    "table_cell_dialog",
+    "table_cell_warning",
     "hyperlink_dialog",
     "spell_dialog",
+    "table_cell_tab",
+    "command_submit",
     "pdf_shx_settings",
     "pdf_layer_toggle",
     "pc_manager_toggle",
@@ -173,10 +177,12 @@ pub(super) const NAMES: &[&str] = &[
     "ribbon_dropdown",
     "keytips",
     "dialog_ok",
+    "dialog_answer",
     "dialog_discard",
     "dialog_cancel",
     "block_def_dialog",
     "table_insert_dialog",
+    "table_style_dialog",
     "attdef_dialog",
     "field_dialog",
     "attman_dialog",
@@ -1052,8 +1058,14 @@ impl OpenCADStudio {
         if self.tabs[i].scene.document.get_entity(target).is_none() {
             return Err(("entity_absent", "No entity with that handle"));
         }
+        // Picked cells of the target table stay picked: their grips are the
+        // cell grips.
+        let cells = self.tabs[i].scene.table_cells.filter(|cells| cells.table == target);
         self.tabs[i].scene.deselect_all();
         self.tabs[i].scene.select_entity(target, false);
+        if let Some(cells) = cells {
+            self.tabs[i].scene.select_table_cells(cells);
+        }
         self.refresh_properties();
         let (world, moves_entity) = self.tabs[i]
             .selected_grip_handles
@@ -1271,6 +1283,15 @@ impl OpenCADStudio {
             .as_str()
             .map(str::to_owned)
             .unwrap_or_else(|| raw.to_string());
+        let i = self.active_tab;
+        if crate::app::properties::property_edits_geometry(&p)
+            && self.any_entity_is_fixed(i, &self.property_target_handles(i))
+        {
+            return Err(failure(
+                "fixed_constraint",
+                crate::app::properties::HELD_BY_FIXED,
+            ));
+        }
         Ok(match p.value {
             PropValue::EditText(_)
             | PropValue::PlainText(_)
@@ -1393,6 +1414,16 @@ impl OpenCADStudio {
         }
         let msg = match name {
             "close_modal" => Message::CloseModal,
+            // Type `value` into the command line and press Enter.
+            "command_submit" => {
+                self.command_line.input = req["value"].as_str().unwrap_or("").to_string();
+                Message::CommandSubmit
+            }
+            // Tab / Shift+Tab in a table cell editor: value "next" or "prev".
+            "table_cell_tab" => match req["value"].as_str() {
+                Some("prev") => Message::DynTabPrev,
+                _ => Message::DynTabNext,
+            },
             // The recovery prompt's Recover button; `close_modal` declines.
             "recovery_accept" => Message::RecoveryAttempt,
             // The conversion-loss warning's choices: save with the losses it
@@ -1733,6 +1764,76 @@ impl OpenCADStudio {
             // `width=…`, `lines=…`, `window=0|1`, `columns_fixed=0|1`,
             // `rows_fixed=0|1`, `preview=0|1`, `styles` (the Table Style
             // button), `ok`.
+            "table_style_dialog" => {
+                // value: "open", "select=<style>", "tab=<0-3>", "cell=<name>",
+                // "new[=<name>]", "rename=<name>", "delete", "<field>=<value>"
+                // (cell fields), "edge<0-5>.<field>=<value>", "flow=<Down|Up>",
+                // "description=<text>", "template_pick", "template_remove",
+                // "apply", "close".
+                let value = string(req, "value")?;
+                let (key, v) = value.split_once('=').unwrap_or((value, ""));
+                if key != "open" && self.active_modal != Some(crate::app::ModalKind::TableStyle) {
+                    return Err(failure("no_dialog", "The Table Style dialog is not open"));
+                }
+                let cell = |field: &'static str| Message::TableStyleCellEdit {
+                    field,
+                    value: v.to_string(),
+                };
+                match key {
+                    "open" => Message::TableStyleDialogOpen,
+                    "select" => Message::TableStyleDialogSelect(v.to_string()),
+                    "tab" => Message::TableStyleDialogTab(v.parse().unwrap_or(0)),
+                    "cell" => Message::TableStyleCellSelect(v.to_string()),
+                    "new" => {
+                        let _ = self.update(cell("name"));
+                        Message::TableStyleCellNew
+                    }
+                    "rename" => {
+                        let _ = self.update(cell("name"));
+                        Message::TableStyleCellRename
+                    }
+                    "delete" => Message::TableStyleCellDelete,
+                    "flow" => Message::TableStyleSetFlow(v.to_string()),
+                    "description" => Message::TableStyleEdit {
+                        field: "description",
+                        value: v.to_string(),
+                    },
+                    "template_pick" => Message::TableStyleTemplatePick,
+                    "template_remove" => Message::TableStyleTemplateRemove,
+                    "apply" => Message::TableStyleApply,
+                    "close" => Message::TableStyleDialogClose,
+                    "height" => cell("height"),
+                    "angle" => cell("angle"),
+                    "hmargin" => cell("hmargin"),
+                    "vmargin" => cell("vmargin"),
+                    "format" => cell("format"),
+                    "align" => cell("align"),
+                    "class" => cell("class"),
+                    "datatype" => cell("datatype"),
+                    "textstyle" => cell("textstyle"),
+                    "textcolor" => cell("textcolor"),
+                    "fillcolor" => cell("fillcolor"),
+                    "merge" => cell("merge"),
+                    edge if edge.starts_with("edge") => {
+                        let (slot, field) = edge[4..].split_once('.').unwrap_or(("", ""));
+                        let field: &'static str = match field {
+                            "visible" => "visible",
+                            "lw" => "lw",
+                            "linetype" => "linetype",
+                            "color" => "color",
+                            "double" => "double",
+                            "spacing" => "spacing",
+                            _ => return Err(failure("invalid_value", "Unknown edge field")),
+                        };
+                        Message::TableStyleEdgeEdit {
+                            edge: slot.parse().unwrap_or(0),
+                            field,
+                            value: v.to_string(),
+                        }
+                    }
+                    _ => return Err(failure("invalid_value", "Unknown Table Style field")),
+                }
+            }
             "table_insert_dialog" => {
                 use crate::ui::window::annotation_data::{TableInsertField as F, TableInsertion};
                 if self.active_modal != Some(crate::app::ModalKind::InsertTable) {
@@ -1755,6 +1856,19 @@ impl OpenCADStudio {
                     "columns_fixed" => Message::TableInsertField(F::ColumnsFixed(on)),
                     "rows_fixed" => Message::TableInsertField(F::RowsFixed(on)),
                     "preview" => Message::TableInsertField(F::Preview(on)),
+                    "first_row" => Message::TableInsertField(F::FirstRowStyle(v.to_string())),
+                    "second_row" => Message::TableInsertField(F::SecondRowStyle(v.to_string())),
+                    "other_rows" => Message::TableInsertField(F::OtherRowStyle(v.to_string())),
+                    "extra_rows" => Message::TableInsertField(F::ExtraRows(v.to_string())),
+                    "extra_columns" => Message::TableInsertField(F::ExtraColumns(v.to_string())),
+                    // "keep=<option index>:<0|1>", the -TABLE Options order.
+                    "keep" => {
+                        let (index, state) = v.split_once(':').unwrap_or((v, "1"));
+                        Message::TableInsertField(F::TemplateOption(
+                            index.parse().unwrap_or(0),
+                            state == "1",
+                        ))
+                    }
                     "styles" => Message::TableInsertManageStyles,
                     "ok" => Message::TableInsertApply,
                     _ => return Err(failure("invalid_value", "Unknown Insert Table field")),
@@ -2360,6 +2474,100 @@ impl OpenCADStudio {
             // "shape=round|angular|none", "label_on=0|1", "label=<text>",
             // "rate_on=0|1", "rate=<text>", "select", "remove", "ok" or
             // "cancel".
+            // The Cell Borders / Cell Contents window, one field per call:
+            // "lineweight=<name>", "linetype=<name>", "color=<name>",
+            // "double=0|1", "spacing=<n>", "edges=all|outside|inside|none|
+            // top|bottom|left|right|inside_h|inside_v", "pick=<n>", "up",
+            // "down", "delete", "layout=1|2|4", "content_spacing=<n>"; the
+            // Cell Block window: "block=<name>", "align=1..9",
+            // "scale=<n>", "autofit=0|1", "rotation=<deg>"; the Cell Data
+            // Format window: "kind=0..8", "unit=<n>", "precision=<text>",
+            // "symbol=<s>", "append=0|1", "negative=0|1", "separator=0..2",
+            // "axis=0..2", "date=<picture>", "conversion=<n>", "prefix=<s>",
+            // "suffix=<s>", "decimal=0..2", "thousands=0..3",
+            // "zero=4|8|1|2" (toggles); "ok" or "cancel".
+            "table_cell_dialog" => {
+                use crate::ui::window::table_cell_dialog::{BorderSet as B, TableCellDialogMsg as T};
+                if !matches!(
+                    self.active_modal,
+                    Some(crate::app::ModalKind::TableCellBorders)
+                        | Some(crate::app::ModalKind::TableCellContents)
+                        | Some(crate::app::ModalKind::TableCellBlock)
+                        | Some(crate::app::ModalKind::TableCellFormat)
+                ) {
+                    return Err(failure("no_dialog", "No table cell window is open"));
+                }
+                let spec = string(req, "value")?;
+                let (key, value) = spec.split_once('=').unwrap_or((spec, ""));
+                let bad = || failure("invalid_value", spec);
+                if key == "cancel" {
+                    Message::CloseModal
+                } else {
+                    Message::TableCellDialog(match key {
+                        "lineweight" => T::Lineweight(value.to_string()),
+                        "linetype" => T::Linetype(value.to_string()),
+                        "color" => T::Color(value.to_string()),
+                        "double" => T::Double(value == "1"),
+                        "spacing" => T::Spacing(value.to_string()),
+                        "edges" => T::Edges(match value {
+                            "all" => B::All,
+                            "outside" => B::Outside,
+                            "inside" => B::Inside,
+                            "none" => B::None,
+                            "top" => B::Top,
+                            "bottom" => B::Bottom,
+                            "left" => B::Left,
+                            "right" => B::Right,
+                            "inside_h" => B::InsideHorizontal,
+                            "inside_v" => B::InsideVertical,
+                            _ => return Err(bad()),
+                        }),
+                        "pick" => T::Pick(value.parse().map_err(|_| bad())?),
+                        "up" => T::Up,
+                        "down" => T::Down,
+                        "delete" => T::Delete,
+                        "layout" => T::Layout(value.parse().map_err(|_| bad())?),
+                        "content_spacing" => T::ContentSpacing(value.to_string()),
+                        "block" => T::BlockName(value.to_string()),
+                        "align" => T::Align(value.parse().map_err(|_| bad())?),
+                        "scale" => T::BlockScale(value.to_string()),
+                        "autofit" => T::AutoFit(value == "1"),
+                        "rotation" => T::BlockRotation(value.to_string()),
+                        "kind" => T::FormatKind(value.parse().map_err(|_| bad())?),
+                        "unit" => T::FormatUnit(value.parse().map_err(|_| bad())?),
+                        "precision" => T::Precision(value.to_string()),
+                        "symbol" => T::Symbol(value.to_string()),
+                        "append" => T::Append(value == "1"),
+                        "negative" => T::Negative(value == "1"),
+                        "separator" => T::Separator(value.parse().map_err(|_| bad())?),
+                        "axis" => T::Axis(value.parse().map_err(|_| bad())?),
+                        "date" => T::DateFormat(value.to_string()),
+                        "conversion" => T::Conversion(value.to_string()),
+                        "prefix" => T::Prefix(value.to_string()),
+                        "suffix" => T::Suffix(value.to_string()),
+                        "decimal" => T::DecimalSeparator(value.parse().map_err(|_| bad())?),
+                        "thousands" => T::ThousandsSeparator(value.parse().map_err(|_| bad())?),
+                        "zero" => T::Zero(value.parse().map_err(|_| bad())?),
+                        "ok" => T::Ok,
+                        _ => return Err(bad()),
+                    })
+                }
+            }
+            // The invalid table cell data type warning: "ok" converts,
+            // "cancel" leaves the cells as they were.
+            "table_cell_warning" => {
+                if self.active_modal != Some(crate::app::ModalKind::TableCellWarning) {
+                    return Err(failure("no_dialog", "The invalid data type warning is not open"));
+                }
+                let spec = string(req, "value")?;
+                match spec {
+                    "ok" => Message::TableCellDialog(
+                        crate::ui::window::table_cell_dialog::TableCellDialogMsg::WarnOk,
+                    ),
+                    "cancel" | "close" => Message::CloseModal,
+                    _ => return Err(failure("invalid_value", spec)),
+                }
+            }
             "dim_inspect_dialog" => {
                 use crate::entities::dim_inspect::Shape;
                 use crate::ui::window::dim_inspect_dialog::DimInspectMsg as D;
@@ -3122,6 +3330,9 @@ impl OpenCADStudio {
                 Some(crate::app::ModalKind::AttDefEdit) => {
                     Message::AttdefDialog(crate::ui::window::attdef_dialog::AttdefDialogMsg::EditOk)
                 }
+                Some(crate::app::ModalKind::InsertAttributes) => Message::InsertAttrDialog(
+                    crate::ui::window::insert_attr_dialog::InsertAttrMsg::Ok,
+                ),
                 Some(crate::app::ModalKind::SheetSet) => {
                     Message::SheetSet(crate::ui::window::sheet_set::SheetSetMsg::Ok)
                 }
@@ -3133,6 +3344,46 @@ impl OpenCADStudio {
                 }
                 _ => return Err(failure("no_dialog", "No dialog with an OK button is open")),
             },
+            // One row of the form an attributed insertion answers in a page:
+            // a script has no command line to type the answer into.
+            "dialog_answer" => {
+                let tag = string(req, "tag")?;
+                let value = string(req, "value")?;
+                let rows = match self.active_modal {
+                    Some(crate::app::ModalKind::InsertAttributes) => match self
+                        .insert_attr_dialog
+                        .as_ref()
+                    {
+                        Some(form) => &form.rows,
+                        None => {
+                            return Err(failure("no_dialog", "The attribute form is not open"))
+                        }
+                    },
+                    _ => return Err(failure("no_dialog", "The attribute form is not open")),
+                };
+                // A tag names a row outright; only when none does is a tag
+                // allowed to stand for the caption a row shows.
+                let Some(index) = rows
+                    .iter()
+                    .position(|row| row.tag == tag)
+                    .or_else(|| {
+                        rows.iter().position(|row| {
+                            row.label == tag
+                                || crate::ui::window::insert_attr_dialog::caption(&row.label) == tag
+                        })
+                    })
+                else {
+                    return Err(failure("unknown_tag", "tag is not a row of the open form"));
+                };
+                Message::InsertAttrDialog(
+                    crate::ui::window::insert_attr_dialog::InsertAttrMsg::Value(index, value.to_string()),
+                )
+            }
+            // The attribute form's Cancel is the plain decline of the parked
+            // placement, so it is the modal closing itself.
+            "dialog_cancel" if self.active_modal == Some(crate::app::ModalKind::InsertAttributes) => {
+                Message::CloseModal
+            }
             "dialog_discard" | "dialog_cancel" => match self.active_modal {
                 Some(crate::app::ModalKind::Unsaved) => {
                     if name == "dialog_discard" {

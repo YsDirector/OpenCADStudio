@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = ມຸມອຽງ
+    .reset-to-style = ຕັ້ງຄືນຕາມຮູບແບບ (__ocs_fmt_0__)
+    .new-text-style = ຮູບແບບຂໍ້ຄວາມໃໝ່
+    .new-style-from-selection = ຮູບແບບໃໝ່ຈາກສິ່ງທີ່ເລືອກ…
+    .update-style-from-selection = ອັບເດດ "__ocs_fmt_0__" ຈາກສິ່ງທີ່ເລືອກ
+    .text-style-manager-dialog = ຕົວຈັດການຮູບແບບຂໍ້ຄວາມ…
+    .style-updated = ອັບເດດຮູບແບບ '__ocs_fmt_0__' ແລ້ວ.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = ແຖບເມນູ
     .ribbon-tab = ແຖບໂບ
     .no-matches = ບໍ່ມີຄຳສັ່ງທີ່ກົງກັນ
+    .switch-windows = ສະຫຼັບໜ້າຕ່າງ
+    .center-layer = ຊັ້ນເສັ້ນກາງ
+    .user-interface = ສ່ວນຕິດຕໍ່ຜູ້ໃຊ້
+    .no-open-drawings = ບໍ່ມີແບບແຕ້ມທີ່ເປີດຢູ່
+    .viewcube = ViewCube
+    .ucs-icon = ໄອຄອນ UCS
+    .file-tabs = ແຖບໄຟລ໌
+    .layout-tabs = ແຖບໂຄງຮ່າງ
+    .command-line = ແຖວຄຳສັ່ງ
+    .status-bar = ແຖບສະຖານະ
+    .customize-qat = ປັບແຕ່ງແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນ
+    .more-commands = ຄຳສັ່ງເພີ່ມເຕີມ…
+    .more-commands-title = ເພີ່ມຄຳສັ່ງໃສ່ແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນ
+    .find-command-to-add = ພິມຄຳສັ່ງທີ່ຈະເພີ່ມ
+    .show-below = ສະແດງຢູ່ລຸ່ມໂບ
+    .show-above = ສະແດງຢູ່ເທິງໂບ
+    .qat-place-unavailable = ໃຊ້ບໍ່ໄດ້ໃນຂະນະທີ່ໂບປິດຢູ່
+    .qat-new = ໃໝ່
+    .qat-open = ເປີດ
+    .qat-save = ບັນທຶກ
+    .qat-save-as = ບັນທຶກເປັນ
+    .qat-plot = ພິມ
+    .qat-undo = ຍົກເລີກ
+    .qat-redo = ເຮັດຄືນ
+    .qat-measure = ວັດແທກ
+    .qat-batch-plot = ພິມເປັນຊຸດ
+    .qat-match-properties = ຈັບຄູ່ຄຸນສົມບັດ
+    .qat-plot-preview = ເບິ່ງຕົວຢ່າງການພິມ
+    .qat-properties = ຄຸນສົມບັດ
+    .add-to-qat = ເພີ່ມໃສ່ແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນ
+    .remove-from-qat = ລຶບອອກຈາກແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນ
+    .add-separator = ເພີ່ມຕົວແບ່ງ
+    .remove-separator = ລຶບຕົວແບ່ງ
+    .qat-show-below = ສະແດງແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນຢູ່ລຸ່ມໂບ
+    .qat-show-above = ສະແດງແຖບເຄື່ອງມືເຂົ້າເຖິງດ່ວນຢູ່ເທິງໂບ
+    .return-to-ribbon = ສົ່ງກັບຄືນໄປໂບ
+    .float-title-side = ຫົວຂໍ້ແຜງຢູ່ດ້ານຂ້າງ, ເຄື່ອງມືເພີ່ມເຕີມເປີດໄປທາງຂວາ
+    .float-title-bottom = ຫົວຂໍ້ແຜງຢູ່ດ້ານລຸ່ມ, ເຄື່ອງມືເພີ່ມເຕີມເປີດລົງລຸ່ມ
+    .floating-suffix = {" "}(ລອຍ)
 
 options =
     .language-section = ພາສາ
@@ -3533,6 +3579,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: ແຍກສະແດງແລ້ວ __ocs_fmt_0__ ຊັ້ນງານ.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: ບໍ່ມີຊັ້ນໃດຖືກແຍກດ້ວຍ LAYISO.
     .laymatch-select-objects-to-change-layer = LAYMATCH  ເລືອກວັດຖຸທີ່ຈະປ່ຽນຊັ້ນງານ:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  ເລືອກວັດຖຸທີ່ຈະສຳເນົາ:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  ເລືອກວັດຖຸໃນເລເຢີປາຍທາງ:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  ເລືອກວັດຖຸຕົ້ນສະບັບເພື່ອໃຫ້ກົງກັບຊັ້ນງານຈາກ:
@@ -3554,6 +3603,7 @@ layers =
     .layer-s-frozen = ແຊ່ແຂງຊັ້ນງານແລ້ວ.
     .layer-s-locked = ລັອກຊັ້ນງານແລ້ວ.
     .layer-s-turned-off = ປິດຊັ້ນງານແລ້ວ.
+    .layoff-select-object-on-layer-undo = LAYOFF  ເລືອກວັດຖຸຢູ່ໃນເລເຍີທີ່ຈະປິດ ຫຼື [Undo]:
     .layer-s-unlocked = ປົດລັອກຊັ້ນງານແລ້ວ.
     .layers = ຊັ້ນງານ: __ocs_fmt_0__
     .lock = ລັອກ
@@ -3931,6 +3981,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  ກໍານົດມຸມໝູນ <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  ກໍານົດຈຸດປາຍທີສອງ:
     .tolerance-specify-insertion-point = TOLERANCE  ກໍານົດຈຸດແຊກ:
+    .tcell-row-above =
+        ແຊກແຖວ
+        ດ້ານເທິງ
+    .tcell-row-below =
+        ແຊກແຖວ
+        ດ້ານລຸ່ມ
+    .tcell-delete-rows =
+        ລຶບ
+        ແຖວ
+    .tcell-col-left =
+        ແຊກຖັນ
+        ດ້ານຊ້າຍ
+    .tcell-col-right =
+        ແຊກຖັນ
+        ດ້ານຂວາ
+    .tcell-delete-cols =
+        ລຶບ
+        ຖັນ
+    .tcell-merge =
+        ຮວມ
+        ຫ້ອງ
+    .tcell-unmerge =
+        ຍົກເລີກ
+        ການຮວມ
+    .tcell-lock =
+        ລັອກ
+        ຫ້ອງ
+    .tcell-edit =
+        ແກ້ໄຂ
+        ຂໍ້ຄວາມ
+    .tcell-match =
+        ຈັບຄູ່
+        ຫ້ອງ
+    .tcell-borders =
+        ເສັ້ນຂອບ
+        ຫ້ອງ
+    .tcell-format =
+        ຮູບແບບ
+        ຂໍ້ມູນ
+    .tcell-block =
+        ແຊກ
+        ບລັອກ
+    .tcell-field =
+        ແຊກ
+        ຟີລດ໌
+    .tcell-contents =
+        ຈັດການເນື້ອໃນ
+        ຫ້ອງ
+    .tcell-link =
+        ລິ້ງ
+        ຫ້ອງ
+    .tcell-download =
+        ດາວໂຫຼດ
+        ຈາກແຫຼ່ງ
+    .tcell-row-style = ຮູບແບບແຖວ
+    .tcell-column-style = ຮູບແບບຖັນ
+    .tcell-width = ຄວາມກວ້າງຫ້ອງ
+    .tcell-height = ຄວາມສູງຫ້ອງ
+    .tcell-border-color = ສີເສັ້ນຂອບ
+    .tcell-border-lineweight = ຄວາມໜາເສັ້ນຂອບ
+    .tcell-border-linetype = ປະເພດເສັ້ນຂອບ
+    .tcell-locking = ການລັອກຫ້ອງ
+    .tcell-data-link = ລິ້ງຂໍ້ມູນຫ້ອງ
+    .tcell-select-destination = ເລືອກຫ້ອງປາຍທາງ:
+    .tcell-select-cell = ເລືອກຫ້ອງຕາຕະລາງ:
+    .tcell-range-first = ເລືອກມຸມທຳອິດຂອງຂອບເຂດຫ້ອງຕາຕະລາງ:
+    .tcell-range-second = ເລືອກມຸມທີສອງຂອງຂອບເຂດຫ້ອງຕາຕະລາງ:
+    .tcell-align-prompt = ປ້ອນການຈັດແນວຫ້ອງ [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = ປ້ອນຮູບແບບຂໍ້ມູນ [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = ປ້ອນຊື່ບລັອກ ຫຼື [?]:
+    .tcell-formula-prompt = ປ້ອນສູດຄິດໄລ່ [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = ຕາມແຖວ/ຖັນ
+    .tcell-unlocked = ບໍ່ໄດ້ລັອກ
+    .tcell-content-locked = ລັອກເນື້ອໃນ
+    .tcell-format-locked = ລັອກຮູບແບບ
+    .tcell-content-format-locked = ລັອກເນື້ອໃນ ແລະ ຮູບແບບ
+    .tcell-not-linked = ບໍ່ໄດ້ລິ້ງ
+    .tcell-invalid-cell = ຫ້ອງບໍ່ຖືກຕ້ອງ.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  ກຳນົດຈຸດແຊກ:
@@ -6529,9 +6657,57 @@ dimstyle =
     .move-text-outside-first = ຍ້າຍຂໍ້ຄວາມອອກດ້ານນອກກ່ອນ
     .period = ຈຸດຈ້ຳ (Period)
     .space = ຍະຫວ່າງ
+    .separator-none = (ບໍ່ມີ)
     .surveyors-units = ຫົວໜ່ວຍການສຳຫຼວດ
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = ໃນແບບແຕ້ມນີ້
+    .stroke-fonts-shx = ຟອນເສັ້ນ (SHX)
+    .font-folders = ໂຟນເດີຟອນ
+    .truetype-fonts = ຟອນ TrueType
+    .font-missing-drawn-with = ບໍ່ພົບ · ແຕ້ມດ້ວຍ __ocs_fmt_0__
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = ໃຊ້ “__ocs_fmt_0__”
+    .face-regular = ປົກກະຕິ
+    .face-bold-italic = ໂຕໜາ ໂຕອຽງ
+    .font-style = ຮູບແບບຟອນ
+    .truetype-fonts-only = ສະເພາະຟອນ TrueType
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. ຂໍ້ຄວາມ 1 ລາຍການທີ່ຕາມຮູບແບບຈະຖືກອັບເດດ.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. ຂໍ້ຄວາມ __ocs_fmt_3__ ລາຍການທີ່ຕາມຮູບແບບຈະຖືກອັບເດດ.
+    .style-update-in-blocks = ພາຍໃນຄຳນິຍາມບລັອກ: __ocs_fmt_0__.
+    .style-update-keeps-one = ຂໍ້ຄວາມ 1 ລາຍການທີ່ມີຄ່າຂອງຕົນເອງຈະຮັກສາໄວ້.
+    .style-update-keeps-many = ຂໍ້ຄວາມ __ocs_fmt_0__ ລາຍການທີ່ມີຄ່າຂອງຕົນເອງຈະຮັກສາໄວ້.
+    .style-update-xref-undo = ຂໍ້ຄວາມໃນການອ້າງອີງພາຍນອກບໍ່ຖືກປ່ຽນ. ຍົກເລີກໄດ້ໃນຂັ້ນດຽວພ້ອມການປ່ຽນຮູບແບບ.
+    .rename-hint = ຄລິກສອງເທື່ອໃສ່ຊື່ເພື່ອປ່ຽນຊື່.
+    .modified-was = ປ່ຽນແລ້ວ · ເດີມ __ocs_fmt_0__
+    .height-asked-hint = 0 = ຈະຖາມຄວາມສູງເມື່ອວາງຂໍ້ຄວາມ.
+    .annotative-paper-hint = ເປີດ: ຄວາມສູງຂ້າງເທິງແມ່ນຄວາມສູງເທິງເຈ້ຍ.
+    .backward-hint = ກັບຫຼັງ ແລະ ປີ້ນຫົວ ມີຜົນກັບຂໍ້ຄວາມແຖວດຽວ ແລະ ແອັດທຣິບິວ, ບໍ່ແມ່ນ MTEXT.
+    .on-apply = ເມື່ອນຳໃຊ້
+    .sample-text = ຂໍ້ຄວາມຕົວຢ່າງ
+    .where-used = ໃຊ້ຢູ່ໃສ
+    .kind-single-line-text = ຂໍ້ຄວາມແຖວດຽວ
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = ນິຍາມແອັດທຣິບິວ
+    .no-texts-use-style = ບໍ່ມີຂໍ້ຄວາມໃດໃຊ້ຮູບແບບນີ້.
+    .inside-one-block = __ocs_fmt_0__ ໃນນັ້ນຢູ່ໃນນິຍາມບລັອກ 1 ອັນ.
+    .inside-blocks = __ocs_fmt_0__ ໃນນັ້ນຢູ່ໃນນິຍາມບລັອກ __ocs_fmt_1__ ອັນ.
+    .used-by-one-text = ໃຊ້ໂດຍຂໍ້ຄວາມ 1 ອັນ
+    .used-by-texts = ໃຊ້ໂດຍຂໍ້ຄວາມ __ocs_fmt_0__ ອັນ
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = ນຳເຂົ້າຮູບແບບ
     .select-drawing-to-import-styles-from = ເລືອກແບບແຕ້ມທີ່ຈະນຳເຂົ້າຮູບແບບ
     .select-the-styles-to-import = ເລືອກຮູບແບບທີ່ຈະນຳເຂົ້າ
@@ -8014,3 +8190,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = ຈຳນວນລາຍການ
+    .row-count = ຈຳນວນແຖວ
+    .row-and-column-count = ຈຳນວນແຖວ ແລະ ຖັນ
+    .item-count = ຈຳນວນລາຍການ
+    .angle-between-items = ມຸມລະຫວ່າງລາຍການ
+    .prompt-columns = ລະບຸຈຳນວນຖັນ (Ctrl: ໄລຍະຖັນທັງໝົດ):
+    .prompt-rows = ລະບຸຈຳນວນແຖວ (Ctrl: ໄລຍະແຖວທັງໝົດ):
+    .prompt-rows-columns = ລະບຸຈຳນວນແຖວ ແລະ ຖັນ:
+    .prompt-items = ລະບຸຈຳນວນລາຍການ (Ctrl: ມຸມເຕີມ ຫຼື ໄລຍະທັງໝົດ):
+    .prompt-column-spacing = ລະບຸໄລຍະຫ່າງລະຫວ່າງຖັນ:
+    .prompt-row-spacing = ລະບຸໄລຍະຫ່າງລະຫວ່າງແຖວ:
+    .prompt-item-spacing = ລະບຸໄລຍະຫ່າງລະຫວ່າງລາຍການ:
+    .prompt-item-angle = ລະບຸມຸມລະຫວ່າງລາຍການ:
+    .prompt-radius = ລະບຸລັດສະໝີ:
+block-chain =
+    .label = ການກະທຳຕໍ່ເນື່ອງ
+    .cycle = ລຳດັບການກະທຳຂອງບລັອກມີວົງຈອນ.
+
+block-action-bars =
+    .requires-session = BACTIONBAR ຕ້ອງການເຊດຊັນທີ່ເປີດໃຊ້ຢູ່ໃນຕົວແກ້ໄຂບລັອກ.
+    .enable-display = ຕັ້ງ BACTIONBARMODE ເປັນ 1 ເພື່ອສະແດງແຖບການກະທຳ.
+    .parameters-changed = ລາຍການພາຣາມິເຕີປ່ຽນແປງແລ້ວ; ເລີ່ມ BACTIONBAR ໃໝ່.
+    .display-updated = ອັບເດດການສະແດງແຖບການກະທຳແລ້ວ.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  ເລືອກພາຣາມິເຕີ, ປ້ອນຊື່ຂອງມັນ ຫຼື [All] <ທີ່ເລືອກ>:
+    .prompt-all = BACTIONBAR  ເລືອກພາຣາມິເຕີ, ປ້ອນຊື່ຂອງມັນ ຫຼື [All] <All>:
+    .choose-mode = ເລືອກ Show, Hide ຫຼື Reset.
+    .unique-parameter = ປ້ອນຊື່ພາຣາມິເຕີທີ່ບໍ່ຊ້ຳກັນ, ເລືອກຈຸດປາຍຂອງມັນ ຫຼື ເລືອກ All.
+    .enter-parameter = ປ້ອນຊື່ພາຣາມິເຕີ ຫຼື ເລືອກ All.
+    .pick-endpoint = ເລືອກຈຸດປາຍພາຣາມິເຕີ ຫຼື ເລືອກ All.
+
+block-construction =
+    .requires-session = BCONSTRUCTION ໃຊ້ໄດ້ໃນຕົວແກ້ໄຂບລັອກເທົ່ານັ້ນ.
+    .choose-operation = ເລືອກ Convert, Revert, Show ຫຼື Hide.
+    .stale-session = ເຊດຊັນຕົວແກ້ໄຂບລັອກຂອງເລຂາຄະນິດຊ່ວຍບໍ່ເປີດໃຊ້ແລ້ວ.
+    .changed-count = ປ່ຽນແປງວັດຖຸເລຂາຄະນິດ __ocs_fmt_0__ ລາຍການແລ້ວ.
+    .prompt-selection = BCONSTRUCTION  ເລືອກເລຂາຄະນິດ ຫຼື [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  ເລືອກ [Convert/Revert] <Convert> ຫຼື ກົດ Enter ເພື່ອໃຊ້ການດຳເນີນການທີ່ເລືອກ:
+    .revert = ຄືນຄ່າ
+    .history = ແກ້ໄຂເລຂາຄະນິດຊ່ວຍ
+    .unsupported-record = ບັນທຶກເລຂາຄະນິດຊ່ວຍນີ້ມີລຸ້ນ ຫຼື ຄ່າທີ່ບໍ່ຮອງຮັບ.
+    .open-definition = ເປີດນິຍາມບລັອກກ່ອນແກ້ໄຂເລຂາຄະນິດຊ່ວຍ.
+    .missing-object = ວັດຖຸເລຂາຄະນິດຊ່ວຍທີ່ເລືອກໃຊ້ບໍ່ໄດ້ແລ້ວ.
+    .active-geometry = ເລືອກເລຂາຄະນິດໃນນິຍາມບລັອກທີ່ເປີດໃຊ້.
+    .locked-layer = ບໍ່ສາມາດປ່ຽນເລຂາຄະນິດຊ່ວຍໃນຊັ້ນທີ່ລັອກໄດ້.
+    .revert-layer = ເລືອກຊັ້ນທີ່ມີຢູ່ ແລະ ບໍ່ລັອກສຳລັບເລຂາຄະນິດທີ່ຄືນຄ່າ.
+
+block-authoring-history =
+    .alignment-type = ປະເພດການຈັດແນວ
+    .action-override = ແກ້ໄຂການກຳນົດຄ່າແທນການກະທຳບລັອກ
+    .action-chain = ແກ້ໄຂລຳດັບການກະທຳບລັອກ
+    .action-base = ແກ້ໄຂຈຸດຖານການກະທຳບລັອກ
+    .parameter-chain = BEDIT ເຊື່ອມຕໍ່ການກະທຳພາຣາມິເຕີ
+    .value-set = BEDIT ຊຸດຄ່າພາຣາມິເຕີ
+    .parameter-metadata = ແກ້ໄຂຂໍ້ມູນກຳກັບພາຣາມິເຕີບລັອກ
+    .authoring-grip = ຈຸດຈັບສຳລັບສ້າງບລັອກ
+
+block-operation-history =
+    .reset-references = ຄືນຄ່າການອ້າງອີງບລັອກ
+    .associate-action = ເຊື່ອມໂຍງການກະທຳບລັອກ
+    .action-selection = ຊຸດການເລືອກຂອງການກະທຳ
+    .test-parameter = ພາຣາມິເຕີບລັອກທົດສອບ
+    .reference-parameter = ພາຣາມິເຕີການອ້າງອີງບລັອກ
+    .align-reference = ຈັດແນວການອ້າງອີງບລັອກ
+    .insertion-grip-order = ປ່ຽນລຳດັບຈຸດຈັບການແຊກ
+    .move-grip = ຍ້າຍຈຸດຈັບບລັອກເດີມ
+    .configure-grips = ຕັ້ງຄ່າຈຸດຈັບພາຣາມິເຕີບລັອກ
+    .lookup-tables = ຕາຕະລາງຄົ້ນຫາ
+    .hyperlink = ລິ້ງຂອງບລັອກ
+    .properties = ຄຸນສົມບັດບລັອກ
+    .properties-table = ຕາຕະລາງຄຸນສົມບັດບລັອກ
+    .visibility-state = ສະຖານະການເບິ່ງເຫັນ
+    .visibility-states = ລາຍການສະຖານະການເບິ່ງເຫັນ
+
+block-formatted-history =
+    .action = ການກະທຳ { $label }
+    .parameter = ພາຣາມິເຕີ { $label }
+    .edit-block = ແກ້ໄຂບລັອກ { $label }
+    .save-block = ບັນທຶກບລັອກເປັນ { $label }
+    .delete-block = ລຶບບລັອກ { $label }
+
+block-history-kinds =
+    .flip = ປີ້ນ
+    .polar-stretch = ຍືດແບບຂົ້ວ
+    .basepoint = ຈຸດຖານ
+    .lookup = ຄົ້ນຫາ
+
+block-action-properties =
+    .base-point = ຈຸດຖານການກະທຳ
+    .overrides = ຄ່າແທນການກະທຳ
+    .multiplier = ຕົວຄູນໄລຍະຫ່າງ
+    .angle-offset = ມຸມຊົດເຊີຍ (ອົງສາ)
+    .chain = ລຳດັບການກະທຳ
+    .chain-to = ເຊື່ອມຕໍ່ໄປຫາ
+
+block-parameter-properties =
+    .show-properties = ສະແດງໃນຄຸນສົມບັດ
+    .parameter-name = ຊື່ພາຣາມິເຕີ
+    .grip-count = ຈຳນວນຈຸດຈັບ
+    .dependent-base = ຈຸດຖານທີ່ຂຶ້ນກັບຈຸດອື່ນ
+    .offset-x = ໄລຍະຊົດເຊີຍຖານ X
+    .offset-y = ໄລຍະຊົດເຊີຍຖານ Y
+    .base-grip = ຕຳແໜ່ງຈຸດຈັບຖານ
+    .end-grip = ຕຳແໜ່ງຈຸດຈັບປາຍ
+    .x-grip = ຕຳແໜ່ງຈຸດຈັບ X
+    .y-grip = ຕຳແໜ່ງຈຸດຈັບ Y
+
+block-value-set =
+    .use-min = ໃຊ້ຄ່າຕ່ຳສຸດຂອງ { $label }
+    .use-max = ໃຊ້ຄ່າສູງສຸດຂອງ { $label }
+    .use-increment = ໃຊ້ຄ່າເພີ່ມຂອງ { $label }
+    .use-list = ໃຊ້ລາຍການຄ່າທີ່ອະນຸຍາດຂອງ { $label }
+    .min = ຄ່າຕ່ຳສຸດຂອງ { $label }
+    .max = ຄ່າສູງສຸດຂອງ { $label }
+    .increment = ຄ່າເພີ່ມຂອງ { $label }
+    .values = ຄ່າທີ່ອະນຸຍາດຂອງ { $label }
+    .title = ຊຸດຄ່າ
+    .x-distance = ໄລຍະຫ່າງ X
+    .y-distance = ໄລຍະຫ່າງ Y
+
+table-style-cells =
+    .tbl-start-from-style = ເລີ່ມຈາກຮູບແບບຕາຕະລາງ
+    .tbl-extra-columns = ຖັນເພີ່ມເຕີມ
+    .tbl-extra-rows = ແຖວເພີ່ມເຕີມ
+    .tbl-keep-from-template = ເກັບໄວ້ຈາກຕາຕະລາງເລີ່ມຕົ້ນ:
+    .tbl-keep-label-text = ຂໍ້ຄວາມຫ້ອງປ້າຍກຳກັບ
+    .tbl-keep-data-text = ຂໍ້ຄວາມຫ້ອງຂໍ້ມູນ
+    .tbl-keep-overrides = ການແທນທີ່ຮູບແບບຫ້ອງ
+    .tbl-keep-links = ລິ້ງຂໍ້ມູນ
+    .tbl-keep-fields = ຟີລດ໌
+    .tbl-keep-formulas = ສູດຄິດໄລ່
+    .tbl-extra-whole = ແຖວ ແລະ ຖັນເພີ່ມເຕີມຕ້ອງເປັນຈຳນວນເຕັມ.
+    .from-style-insertion = __ocs_arg_n__  ກຳນົດຈຸດແຊກ ຫຼື [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  ປ້ອນຊື່ຮູບແບບຕາຕະລາງ ຫຼື [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  ປ້ອນຈຳນວນແຖວເພີ່ມເຕີມ <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  ປ້ອນຈຳນວນຖັນເພີ່ມເຕີມ <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  ປ້ອນຕົວເລືອກການແຊກ [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  ລວມ __ocs_arg_what__ ໃນຕາຕະລາງທີ່ແຊກບໍ? [Yes/No] <__ocs_arg_current__>:
+    .label-text = ຂໍ້ຄວາມປ້າຍກຳກັບ
+    .data-text = ຂໍ້ຄວາມຂໍ້ມູນ
+    .formulas = ສູດຄິດໄລ່
+    .fields = ຟີລດ໌
+    .data-links = ລິ້ງຂໍ້ມູນ
+    .blocks = ບລັອກ
+    .cell-style-overrides = ການແທນທີ່ຮູບແບບຫ້ອງ
+    .style-name-header = ຊື່ຮູບແບບຕາຕະລາງ
+    .no-starting-table = ຮູບແບບຕາຕະລາງບໍ່ມີຕາຕະລາງ.
+    .select-table = ເລືອກຕາຕະລາງ:
+    .not-a-table = ວັດຖຸນີ້ບໍ່ແມ່ນຕາຕະລາງ.
+    .cell-style-exists = ມີຮູບແບບຫ້ອງຊື່ນີ້ຢູ່ແລ້ວ.
+    .cell-style-in-use = ຮູບແບບຫ້ອງກຳລັງຖືກໃຊ້ ແລະ ລຶບບໍ່ໄດ້.
+    .template-size = __ocs_arg_rows__ ແຖວ × __ocs_arg_columns__ ຖັນ
+    .cell-properties = ຄຸນສົມບັດຫ້ອງ
+    .cell-text = ຂໍ້ຄວາມຫ້ອງ
+    .cell-borders = ເສັ້ນຂອບຫ້ອງ
+    .cell-styles = ຮູບແບບຫ້ອງ
+    .label = ປ້າຍກຳກັບ
+    .margins = ໄລຍະຂອບ
+    .merge-on-create = ຮວມຫ້ອງເມື່ອສ້າງແຖວ/ຖັນ
+    .new-from-this = ສ້າງໃໝ່ຈາກອັນນີ້
+    .new-name = ຊື່ໃໝ່
+    .real-number = ຈຳນວນຈິງ
+    .whole-number = ຈຳນວນເຕັມ
+    .select-table-button = ເລືອກຕາຕະລາງ…
+    .starting-table = ຕາຕະລາງເລີ່ມຕົ້ນ
+    .table-direction = ທິດທາງຕາຕະລາງ
+
+table-cells =
+    .borders-title = ເສັ້ນຂອບຫ້ອງ
+    .contents-title = ເນື້ອໃນຫ້ອງ
+    .line = ເສັ້ນ
+    .lineweight = ຄວາມໜາເສັ້ນ
+    .linetype = ປະເພດເສັ້ນ
+    .color = ສີ
+    .double = ເສັ້ນຄູ່
+    .spacing = ໄລຍະຫ່າງ
+    .apply-to = ນຳໃຊ້ກັບ
+    .all = ທັງໝົດ
+    .outside = ດ້ານນອກ
+    .inside = ດ້ານໃນ
+    .none = ບໍ່ມີ
+    .top = ເທິງ
+    .bottom = ລຸ່ມ
+    .left = ຊ້າຍ
+    .right = ຂວາ
+    .inside-horizontal = ດ້ານໃນລວງນອນ
+    .inside-vertical = ດ້ານໃນລວງຕັ້ງ
+    .contents = ເນື້ອໃນ
+    .empty = ຫ້ອງນີ້ຫວ່າງເປົ່າ.
+    .move-up = ຍ້າຍຂຶ້ນ
+    .move-down = ຍ້າຍລົງ
+    .delete = ລຶບ
+    .layout = ການຈັດວາງ
+    .flow = ໄຫຼຕໍ່ເນື່ອງ
+    .stack-horizontal = ຊ້ອນລວງນອນ
+    .stack-vertical = ຊ້ອນລວງຕັ້ງ
+    .content-spacing = ໄລຍະຫ່າງ
+    .block-item = ບລັອກ: { $name }
+    .text-item = ຂໍ້ຄວາມ: { $text }
+    .text-content = ຂໍ້ຄວາມຫ້ອງຕາຕະລາງ
+    .borders-help = ກຳນົດຄວາມໜາເສັ້ນ, ປະເພດເສັ້ນ ແລະ ສີຂອງເສັ້ນຂອບຫ້ອງທີ່ເລືອກ; ເລືອກຂອບທີ່ຈະນຳໃຊ້.
+    .contents-help = ຈັດລຳດັບ, ລຶບ ແລະ ຈັດວາງເນື້ອໃນຂອງຫ້ອງທີ່ເລືອກ.
+    .block-title = ບລັອກຫ້ອງ
+    .format-title = ຮູບແບບຂໍ້ມູນຫ້ອງ
+    .block = ບລັອກ
+    .block-name = ຊື່
+    .browse = ເລືອກໄຟລ໌...
+    .block-path = ເສັ້ນທາງ
+    .placement = ການວາງ
+    .alignment = ການຈັດແນວຫ້ອງ
+    .scale = ມາດຕາສ່ວນ
+    .autofit = ປັບພໍດີອັດຕະໂນມັດ
+    .rotation = ມຸມໝູນ
+    .format = ຮູບແບບ
+    .current-precision = ຄວາມລະອຽດປັດຈຸບັນ
+    .precision = ຄວາມລະອຽດ
+    .symbol = ສັນຍາລັກ
+    .append-symbol = ຕໍ່ສັນຍາລັກທາງຫຼັງ
+    .negative-parens = ຄ່າລົບໃນວົງເລັບ
+    .list-separator = ຕົວຂັ້ນລາຍການ
+    .date-format = ຮູບແບບວັນທີ
+    .no-format-settings = ປະເພດຂໍ້ມູນນີ້ບໍ່ມີການຕັ້ງຄ່າຮູບແບບ.
+    .data-type = ປະເພດຂໍ້ມູນ
+    .format-settings = ຮູບແບບ
+    .currency = ສະກຸນເງິນ
+    .decimal-number = ຈຳນວນທົດສະນິຍົມ
+    .percentage = ເປີເຊັນ
+    .whole-number = ຈຳນວນເຕັມ
+    .grads = ກຣາດ
+    .sample-text = ຂໍ້ຄວາມຕົວຢ່າງ
+    .block-help = ວາງບລັອກໃນຫ້ອງທີ່ເລືອກ: ຕຳແໜ່ງ, ມາດຕາສ່ວນ (ຫຼື ປັບພໍດີຫ້ອງ) ແລະ ການໝູນ.
+    .format-help = ກຳນົດປະເພດຂໍ້ມູນ ແລະ ຮູບແບບທີ່ໃຊ້ອ່ານຄ່າຂອງຫ້ອງທີ່ເລືອກ.
+    .additional-format = ຮູບແບບເພີ່ມເຕີມ
+    .conversion = ຕົວຄູນການແປງ
+    .prefix = ຄຳນຳໜ້າ
+    .suffix = ຄຳຕໍ່ທ້າຍ
+    .decimal-separator = ຕົວຂັ້ນທົດສະນິຍົມ
+    .thousands-separator = ຕົວຂັ້ນຫຼັກພັນ
+    .space = ຍະຫວ່າງ
+    .separator-none = (ບໍ່ມີ)
+    .zero-leading = ສູນນຳໜ້າ
+    .zero-trailing = ສູນທາງທ້າຍ
+    .zero-feet = 0 ຟຸດ
+    .zero-inches = 0 ນິ້ວ
+    .warning-title = ປະເພດຂໍ້ມູນບໍ່ກົງກັນ
+    .warning-heading = ຫ້ອງເຫຼົ່ານີ້ມີຄ່າທີ່ບໍ່ແມ່ນປະເພດຂໍ້ມູນທີ່ເລືອກ.
+    .warning-note = ການແປງຈະອ່ານແຕ່ລະຄ່າເປັນປະເພດໃໝ່; ຄ່າທີ່ອ່ານບໍ່ໄດ້ຈະຖືກລ້າງ. ຍົກເລີກຈະບໍ່ປ່ຽນແປງຫ້ອງ.
+    .warning-ok = ແປງ
+    .warning-cancel = ຍົກເລີກ
+
+parameters-manager =
+    .action-parameters = ພາຣາມິເຕີການກະທຳ
+    .filter = ຊື່*
+    .search = ຄົ້ນຫາພາຣາມິເຕີ
+    .order = ລຳດັບ
+    .polar = ແບບຂົ້ວ
+    .visibility = ການເບິ່ງເຫັນ
+    .variable = ຕົວແປ
+    .footer = ທັງໝົດ: ສະແດງ { $shown } ຈາກ { $total } ພາຣາມິເຕີ
+
+parameters-manager-feedback =
+    .no-number = ແຖວນີ້ບໍ່ມີຕົວເລກໃຫ້ແກ້ໄຂ.
+    .no-flag = ແຖວນີ້ບໍ່ມີທຸງການເບິ່ງເຫັນໃຫ້ປ່ຽນ.
+    .finite-number = ລະບຸຄ່າຕົວເລກພາຣາມິເຕີທີ່ຈຳກັດ.
+    .stale-session = ເຊດຊັນຕົວແກ້ໄຂບລັອກບໍ່ເປີດໃຊ້ແລ້ວ.
+    .positive-length = ລະບຸຄວາມຍາວພາຣາມິເຕີທີ່ເປັນບວກ.
+    .no-direction = ທິດທາງພາຣາມິເຕີບໍ່ພ້ອມໃຊ້.
+    .history = ແກ້ໄຂຕົວຈັດການພາຣາມິເຕີ
+
+block-action-targets =
+    .prompt = BACTIONSET  ເລືອກວັດຖຸ ຫຼື ພິມ Parameter ຕາມດ້ວຍຊື່ຈຸດ ແລ້ວກົດ Enter (Parameter "…"):
+    .create-prompt = BACTION  ເລືອກວັດຖຸ ຫຼື ພິມ Parameter ຕາມດ້ວຍຊື່ຈຸດ ແລ້ວກົດ Enter (Parameter "…"):
+    .unique-point = ປ້ອນຊື່ພາຣາມິເຕີຈຸດທີ່ບໍ່ຊ້ຳກັນ.
+    .empty = ການກະທຳຕ້ອງມີເປົ້າໝາຍຢ່າງໜ້ອຍໜຶ່ງລາຍການ.
+    .invalid = ເລືອກເປົ້າໝາຍທີ່ຮອງຮັບຂອງບລັອກນີ້.
+    .stale = ການກະທຳ ຫຼື ເຊດຊັນຕົວແກ້ໄຂບລັອກປ່ຽນແປງແລ້ວ; ເລີ່ມ BACTIONSET ໃໝ່.
+    .create-stale = ການກະທຳ ຫຼື ເຊດຊັນຕົວແກ້ໄຂບລັອກປ່ຽນແປງແລ້ວ; ເລີ່ມ BACTION ໃໝ່.

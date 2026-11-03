@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = तिरछा कोण
+    .reset-to-style = शैली पर रीसेट करें (__ocs_fmt_0__)
+    .new-text-style = नई टेक्स्ट शैली
+    .new-style-from-selection = चयन से नई शैली…
+    .update-style-from-selection = चयन से "__ocs_fmt_0__" अपडेट करें
+    .text-style-manager-dialog = टेक्स्ट शैली प्रबंधक…
+    .style-updated = शैली '__ocs_fmt_0__' अपडेट की गई।
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = मेनू बार
     .ribbon-tab = रिबन टैब
     .no-matches = कोई मिलती-जुलती कमांड नहीं
+    .switch-windows = विंडो बदलें
+    .center-layer = केंद्र रेखा परत
+    .user-interface = यूज़र इंटरफ़ेस
+    .no-open-drawings = कोई ड्रॉइंग खुली नहीं है
+    .viewcube = ViewCube
+    .ucs-icon = UCS आइकन
+    .file-tabs = फ़ाइल टैब
+    .layout-tabs = लेआउट टैब
+    .command-line = कमांड लाइन
+    .status-bar = स्टेटस बार
+    .customize-qat = त्वरित पहुँच टूलबार अनुकूलित करें
+    .more-commands = और कमांड…
+    .more-commands-title = त्वरित पहुँच टूलबार में कमांड जोड़ें
+    .find-command-to-add = जोड़ने के लिए कमांड टाइप करें
+    .show-below = रिबन के नीचे दिखाएँ
+    .show-above = रिबन के ऊपर दिखाएँ
+    .qat-place-unavailable = रिबन बंद होने पर उपलब्ध नहीं
+    .qat-new = नया
+    .qat-open = खोलें
+    .qat-save = सहेजें
+    .qat-save-as = इस रूप में सहेजें
+    .qat-plot = प्लॉट
+    .qat-undo = पूर्ववत करें
+    .qat-redo = फिर से करें
+    .qat-measure = मापें
+    .qat-batch-plot = बैच प्लॉट
+    .qat-match-properties = गुण मिलाएँ
+    .qat-plot-preview = प्लॉट पूर्वावलोकन
+    .qat-properties = गुण
+    .add-to-qat = त्वरित पहुँच टूलबार में जोड़ें
+    .remove-from-qat = त्वरित पहुँच टूलबार से हटाएँ
+    .add-separator = विभाजक जोड़ें
+    .remove-separator = विभाजक हटाएँ
+    .qat-show-below = त्वरित पहुँच टूलबार को रिबन के नीचे दिखाएँ
+    .qat-show-above = त्वरित पहुँच टूलबार को रिबन के ऊपर दिखाएँ
+    .return-to-ribbon = रिबन पर लौटाएँ
+    .float-title-side = पैनल शीर्षक किनारे पर, अतिरिक्त टूल दाईं ओर खुलते हैं
+    .float-title-bottom = पैनल शीर्षक नीचे, अतिरिक्त टूल नीचे की ओर खुलते हैं
+    .floating-suffix = {" "}(फ़्लोटिंग)
 
 options =
     .language-section = भाषा
@@ -3520,6 +3566,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: __ocs_fmt_0__ लेयर आइसोलेट की गईं।
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: LAYISO द्वारा कोई लेयर अलग नहीं की गई।
     .laymatch-select-objects-to-change-layer = LAYMATCH लेयर बदलने के लिए ऑब्जेक्ट चुनें:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  कॉपी करने के लिए ऑब्जेक्ट चुनें:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  गंतव्य लेयर पर एक ऑब्जेक्ट चुनें:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH मिलान के लिए स्रोत ऑब्जेक्ट चुनें:
@@ -3541,6 +3590,7 @@ layers =
     .layer-s-frozen = लेयर फ़्रीज़ की गईं।
     .layer-s-locked = लेयर लॉक की गईं।
     .layer-s-turned-off = लेयर बंद की गईं।
+    .layoff-select-object-on-layer-undo = LAYOFF  बंद की जाने वाली लेयर पर कोई ऑब्जेक्ट चुनें या [Undo]:
     .layer-s-unlocked = लेयर अनलॉक की गईं।
     .layers = लेयर: __ocs_fmt_0__
     .lock = लॉक
@@ -3918,6 +3968,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  घूर्णन कोण निर्दिष्ट करें <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE निर्दिष्ट सम्मिलन बिंदु:
+    .tcell-row-above =
+        ऊपर
+        पंक्ति जोड़ें
+    .tcell-row-below =
+        नीचे
+        पंक्ति जोड़ें
+    .tcell-delete-rows =
+        पंक्तियाँ
+        हटाएँ
+    .tcell-col-left =
+        बाएँ
+        स्तंभ जोड़ें
+    .tcell-col-right =
+        दाएँ
+        स्तंभ जोड़ें
+    .tcell-delete-cols =
+        स्तंभ
+        हटाएँ
+    .tcell-merge =
+        सेल
+        मर्ज करें
+    .tcell-unmerge =
+        मर्ज
+        हटाएँ
+    .tcell-lock =
+        सेल
+        लॉक
+    .tcell-edit =
+        टेक्स्ट
+        संपादित करें
+    .tcell-match =
+        सेल
+        मिलाएँ
+    .tcell-borders =
+        सेल
+        सीमाएँ
+    .tcell-format =
+        डेटा
+        प्रारूप
+    .tcell-block =
+        ब्लॉक
+        जोड़ें
+    .tcell-field =
+        फ़ील्ड
+        जोड़ें
+    .tcell-contents =
+        सेल सामग्री
+        प्रबंधित करें
+    .tcell-link =
+        सेल
+        लिंक करें
+    .tcell-download =
+        स्रोत से
+        डाउनलोड
+    .tcell-row-style = पंक्ति शैली
+    .tcell-column-style = स्तंभ शैली
+    .tcell-width = सेल की चौड़ाई
+    .tcell-height = सेल की ऊँचाई
+    .tcell-border-color = सीमा का रंग
+    .tcell-border-lineweight = सीमा की लाइन मोटाई
+    .tcell-border-linetype = सीमा का लाइनटाइप
+    .tcell-locking = सेल लॉकिंग
+    .tcell-data-link = सेल डेटा लिंक
+    .tcell-select-destination = गंतव्य सेल चुनें:
+    .tcell-select-cell = तालिका सेल चुनें:
+    .tcell-range-first = तालिका सेल श्रेणी का पहला कोना चुनें:
+    .tcell-range-second = तालिका सेल श्रेणी का दूसरा कोना चुनें:
+    .tcell-align-prompt = सेल संरेखण दर्ज करें [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = डेटा प्रारूप दर्ज करें [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = ब्लॉक का नाम दर्ज करें या [?]:
+    .tcell-formula-prompt = सूत्र दर्ज करें [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = पंक्ति/स्तंभ के अनुसार
+    .tcell-unlocked = अनलॉक
+    .tcell-content-locked = सामग्री लॉक
+    .tcell-format-locked = प्रारूप लॉक
+    .tcell-content-format-locked = सामग्री और प्रारूप लॉक
+    .tcell-not-linked = लिंक नहीं
+    .tcell-invalid-cell = अमान्य सेल।
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  सम्मिलन बिंदु निर्दिष्ट करें:
@@ -6516,9 +6644,57 @@ dimstyle =
     .move-text-outside-first = पहले पाठ बाहर ले जाएँ
     .period = दशमलव बिंदु
     .space = रिक्त स्थान
+    .separator-none = (कोई नहीं)
     .surveyors-units = सर्वेक्षण इकाइयाँ
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = इस ड्रॉइंग में
+    .stroke-fonts-shx = स्ट्रोक फ़ॉन्ट (SHX)
+    .font-folders = फ़ॉन्ट फ़ोल्डर
+    .truetype-fonts = TrueType फ़ॉन्ट
+    .font-missing-drawn-with = अनुपलब्ध · __ocs_fmt_0__ से बनाया गया
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = “__ocs_fmt_0__” उपयोग करें
+    .face-regular = सामान्य
+    .face-bold-italic = बोल्ड इटैलिक
+    .font-style = फ़ॉन्ट शैली
+    .truetype-fonts-only = केवल TrueType फ़ॉन्ट
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. शैली का अनुसरण करने वाला 1 टेक्स्ट अपडेट होगा।
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. शैली का अनुसरण करने वाले __ocs_fmt_3__ टेक्स्ट अपडेट होंगे।
+    .style-update-in-blocks = ब्लॉक परिभाषाओं के अंदर: __ocs_fmt_0__।
+    .style-update-keeps-one = अपने मान वाला 1 टेक्स्ट उसे बनाए रखता है।
+    .style-update-keeps-many = अपने मान वाले __ocs_fmt_0__ टेक्स्ट उसे बनाए रखते हैं।
+    .style-update-xref-undo = बाहरी संदर्भों के टेक्स्ट नहीं बदलते। शैली परिवर्तन के साथ एक पूर्ववत चरण।
+    .rename-hint = नाम बदलने के लिए उस पर डबल-क्लिक करें।
+    .modified-was = बदला गया · पहले __ocs_fmt_0__
+    .height-asked-hint = 0 = टेक्स्ट रखते समय ऊँचाई पूछी जाती है।
+    .annotative-paper-hint = चालू: ऊपर की ऊँचाई कागज़ पर ऊँचाई है।
+    .backward-hint = उल्टा और ऊपर-नीचे एक-पंक्ति टेक्स्ट और एट्रिब्यूट पर लागू होते हैं, MTEXT पर नहीं।
+    .on-apply = लागू करने पर
+    .sample-text = नमूना टेक्स्ट
+    .where-used = कहाँ उपयोग हुआ
+    .kind-single-line-text = एक-पंक्ति टेक्स्ट
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = एट्रिब्यूट परिभाषाएँ
+    .no-texts-use-style = कोई टेक्स्ट इस शैली का उपयोग नहीं करता।
+    .inside-one-block = इनमें से __ocs_fmt_0__ 1 ब्लॉक परिभाषा में।
+    .inside-blocks = इनमें से __ocs_fmt_0__ __ocs_fmt_1__ ब्लॉक परिभाषाओं में।
+    .used-by-one-text = 1 टेक्स्ट में उपयोग
+    .used-by-texts = __ocs_fmt_0__ टेक्स्ट में उपयोग
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = शैलियाँ आयात करें
     .select-drawing-to-import-styles-from = शैलियाँ आयात करने के लिए ड्रॉइंग चुनें
     .select-the-styles-to-import = आयात करने के लिए शैलियाँ चुनें
@@ -8011,3 +8187,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = आइटम की संख्या
+    .row-count = पंक्तियों की संख्या
+    .row-and-column-count = पंक्तियों और स्तंभों की संख्या
+    .item-count = आइटम की संख्या
+    .angle-between-items = आइटम के बीच कोण
+    .prompt-columns = स्तंभों की संख्या निर्दिष्ट करें (Ctrl: कुल स्तंभ अंतराल):
+    .prompt-rows = पंक्तियों की संख्या निर्दिष्ट करें (Ctrl: कुल पंक्ति अंतराल):
+    .prompt-rows-columns = पंक्तियों और स्तंभों की संख्या निर्दिष्ट करें:
+    .prompt-items = आइटम की संख्या निर्दिष्ट करें (Ctrl: भरण कोण या कुल अंतराल):
+    .prompt-column-spacing = स्तंभों के बीच दूरी निर्दिष्ट करें:
+    .prompt-row-spacing = पंक्तियों के बीच दूरी निर्दिष्ट करें:
+    .prompt-item-spacing = आइटम के बीच दूरी निर्दिष्ट करें:
+    .prompt-item-angle = आइटम के बीच कोण निर्दिष्ट करें:
+    .prompt-radius = त्रिज्या निर्दिष्ट करें:
+block-chain =
+    .label = श्रृंखलाबद्ध क्रियाएँ
+    .cycle = ब्लॉक की क्रिया श्रृंखला में एक चक्र है।
+
+block-action-bars =
+    .requires-session = BACTIONBAR के लिए ब्लॉक संपादक का सक्रिय सत्र आवश्यक है।
+    .enable-display = क्रिया पट्टियाँ दिखाने के लिए BACTIONBARMODE को 1 पर सेट करें।
+    .parameters-changed = पैरामीटर सूची बदल गई है; BACTIONBAR फिर से शुरू करें।
+    .display-updated = क्रिया पट्टियों का प्रदर्शन अद्यतन किया गया।
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  पैरामीटर चुनें, उसका नाम दर्ज करें या [All] <चयनित>:
+    .prompt-all = BACTIONBAR  पैरामीटर चुनें, उसका नाम दर्ज करें या [All] <All>:
+    .choose-mode = Show, Hide या Reset चुनें।
+    .unique-parameter = पैरामीटर का अद्वितीय नाम दर्ज करें, उसका अंतिम बिंदु चुनें या All चुनें।
+    .enter-parameter = पैरामीटर का नाम दर्ज करें या All चुनें।
+    .pick-endpoint = पैरामीटर का अंतिम बिंदु चुनें या All चुनें।
+
+block-construction =
+    .requires-session = BCONSTRUCTION केवल ब्लॉक संपादक में उपलब्ध है।
+    .choose-operation = Convert, Revert, Show या Hide चुनें।
+    .stale-session = निर्माण ज्यामिति का ब्लॉक संपादक सत्र अब सक्रिय नहीं है।
+    .changed-count = __ocs_fmt_0__ ज्यामितीय ऑब्जेक्ट बदले गए।
+    .prompt-selection = BCONSTRUCTION  ज्यामिति चुनें या [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  [Convert/Revert] <Convert> चुनें, या चयनित क्रिया लागू करने के लिए Enter दबाएँ:
+    .revert = वापस करें
+    .history = निर्माण ज्यामिति संपादित करें
+    .unsupported-record = इस निर्माण रिकॉर्ड का संस्करण या मान समर्थित नहीं है।
+    .open-definition = निर्माण ज्यामिति संपादित करने से पहले ब्लॉक परिभाषा खोलें।
+    .missing-object = चयनित निर्माण ऑब्जेक्ट अब उपलब्ध नहीं है।
+    .active-geometry = सक्रिय ब्लॉक परिभाषा में ज्यामिति चुनें।
+    .locked-layer = लॉक की गई परत पर निर्माण ज्यामिति नहीं बदली जा सकती।
+    .revert-layer = वापस की गई ज्यामिति के लिए मौजूदा अनलॉक परत चुनें।
+
+block-authoring-history =
+    .alignment-type = संरेखण प्रकार
+    .action-override = ब्लॉक क्रिया का ओवरराइड संपादित करें
+    .action-chain = ब्लॉक क्रिया श्रृंखला संपादित करें
+    .action-base = ब्लॉक क्रिया का आधार बिंदु संपादित करें
+    .parameter-chain = BEDIT पैरामीटर क्रियाओं की श्रृंखला
+    .value-set = BEDIT पैरामीटर मान समूह
+    .parameter-metadata = ब्लॉक पैरामीटर का मेटाडेटा संपादित करें
+    .authoring-grip = ब्लॉक निर्माण ग्रिप
+
+block-operation-history =
+    .reset-references = ब्लॉक संदर्भ रीसेट करें
+    .associate-action = ब्लॉक क्रिया संबद्ध करें
+    .action-selection = क्रिया चयन समूह
+    .test-parameter = परीक्षण ब्लॉक पैरामीटर
+    .reference-parameter = ब्लॉक संदर्भ पैरामीटर
+    .align-reference = ब्लॉक संदर्भ संरेखित करें
+    .insertion-grip-order = सम्मिलन ग्रिप क्रम बदलें
+    .move-grip = मूल ब्लॉक ग्रिप ले जाएँ
+    .configure-grips = ब्लॉक पैरामीटर ग्रिप कॉन्फ़िगर करें
+    .lookup-tables = लुकअप तालिकाएँ
+    .hyperlink = ब्लॉक हाइपरलिंक
+    .properties = ब्लॉक गुण
+    .properties-table = ब्लॉक गुण तालिका
+    .visibility-state = दृश्यता स्थिति
+    .visibility-states = दृश्यता स्थितियाँ
+
+block-formatted-history =
+    .action = { $label } क्रिया
+    .parameter = { $label } पैरामीटर
+    .edit-block = ब्लॉक { $label } संपादित करें
+    .save-block = ब्लॉक को { $label } नाम से सहेजें
+    .delete-block = ब्लॉक { $label } हटाएँ
+
+block-history-kinds =
+    .flip = पलटें
+    .polar-stretch = ध्रुवीय खिंचाव
+    .basepoint = आधार बिंदु
+    .lookup = लुकअप
+
+block-action-properties =
+    .base-point = क्रिया आधार बिंदु
+    .overrides = क्रिया ओवरराइड
+    .multiplier = दूरी गुणक
+    .angle-offset = कोण ऑफ़सेट (डिग्री)
+    .chain = क्रिया श्रृंखला
+    .chain-to = इससे जोड़ें
+
+block-parameter-properties =
+    .show-properties = गुणों में दिखाएँ
+    .parameter-name = पैरामीटर नाम
+    .grip-count = ग्रिप की संख्या
+    .dependent-base = आश्रित आधार बिंदु
+    .offset-x = आधार ऑफ़सेट X
+    .offset-y = आधार ऑफ़सेट Y
+    .base-grip = आधार ग्रिप स्थान
+    .end-grip = अंत ग्रिप स्थान
+    .x-grip = X ग्रिप स्थान
+    .y-grip = Y ग्रिप स्थान
+
+block-value-set =
+    .use-min = { $label } न्यूनतम उपयोग करें
+    .use-max = { $label } अधिकतम उपयोग करें
+    .use-increment = { $label } वृद्धि उपयोग करें
+    .use-list = { $label } अनुमत मान सूची उपयोग करें
+    .min = { $label } न्यूनतम
+    .max = { $label } अधिकतम
+    .increment = { $label } वृद्धि
+    .values = { $label } अनुमत मान
+    .title = मान समूह
+    .x-distance = X दूरी
+    .y-distance = Y दूरी
+
+table-style-cells =
+    .tbl-start-from-style = तालिका शैली से शुरू करें
+    .tbl-extra-columns = अतिरिक्त स्तंभ
+    .tbl-extra-rows = अतिरिक्त पंक्तियाँ
+    .tbl-keep-from-template = प्रारंभिक तालिका से रखें:
+    .tbl-keep-label-text = लेबल सेल टेक्स्ट
+    .tbl-keep-data-text = डेटा सेल टेक्स्ट
+    .tbl-keep-overrides = सेल शैली ओवरराइड
+    .tbl-keep-links = डेटा लिंक
+    .tbl-keep-fields = फ़ील्ड
+    .tbl-keep-formulas = सूत्र
+    .tbl-extra-whole = अतिरिक्त पंक्तियाँ और स्तंभ पूर्ण संख्याएँ होनी चाहिए।
+    .from-style-insertion = __ocs_arg_n__  सम्मिलन बिंदु निर्दिष्ट करें या [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  तालिका शैली का नाम दर्ज करें या [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  अतिरिक्त पंक्तियों की संख्या दर्ज करें <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  अतिरिक्त स्तंभों की संख्या दर्ज करें <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  सम्मिलन विकल्प दर्ज करें [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  सम्मिलित तालिका में __ocs_arg_what__ शामिल करें? [Yes/No] <__ocs_arg_current__>:
+    .label-text = लेबल टेक्स्ट
+    .data-text = डेटा टेक्स्ट
+    .formulas = सूत्र
+    .fields = फ़ील्ड
+    .data-links = डेटा लिंक
+    .blocks = ब्लॉक
+    .cell-style-overrides = सेल शैली ओवरराइड
+    .style-name-header = तालिका शैली नाम
+    .no-starting-table = तालिका शैली में कोई तालिका नहीं है।
+    .select-table = एक तालिका चुनें:
+    .not-a-table = ऑब्जेक्ट तालिका नहीं है।
+    .cell-style-exists = इस नाम की सेल शैली पहले से मौजूद है।
+    .cell-style-in-use = सेल शैली उपयोग में है और हटाई नहीं जा सकती।
+    .template-size = __ocs_arg_rows__ पंक्तियाँ × __ocs_arg_columns__ स्तंभ
+    .cell-properties = सेल गुण
+    .cell-text = सेल टेक्स्ट
+    .cell-borders = सेल सीमाएँ
+    .cell-styles = सेल शैलियाँ
+    .label = लेबल
+    .margins = हाशिये
+    .merge-on-create = पंक्ति/स्तंभ बनाते समय सेल मर्ज करें
+    .new-from-this = इससे नया
+    .new-name = नया नाम
+    .real-number = वास्तविक संख्या
+    .whole-number = पूर्ण संख्या
+    .select-table-button = तालिका चुनें…
+    .starting-table = प्रारंभिक तालिका
+    .table-direction = तालिका दिशा
+
+table-cells =
+    .borders-title = सेल सीमाएँ
+    .contents-title = सेल सामग्री
+    .line = रेखा
+    .lineweight = लाइन की मोटाई
+    .linetype = लाइनटाइप
+    .color = रंग
+    .double = दोहरी रेखा
+    .spacing = रिक्ति
+    .apply-to = इन पर लागू करें
+    .all = सभी
+    .outside = बाहरी
+    .inside = भीतरी
+    .none = कोई नहीं
+    .top = ऊपर
+    .bottom = नीचे
+    .left = बाएँ
+    .right = दाएँ
+    .inside-horizontal = भीतरी क्षैतिज
+    .inside-vertical = भीतरी ऊर्ध्वाधर
+    .contents = सामग्री
+    .empty = सेल खाली है।
+    .move-up = ऊपर ले जाएँ
+    .move-down = नीचे ले जाएँ
+    .delete = हटाएँ
+    .layout = विन्यास
+    .flow = प्रवाह
+    .stack-horizontal = क्षैतिज रूप से स्टैक
+    .stack-vertical = ऊर्ध्वाधर रूप से स्टैक
+    .content-spacing = रिक्ति
+    .block-item = ब्लॉक: { $name }
+    .text-item = टेक्स्ट: { $text }
+    .text-content = तालिका सेल टेक्स्ट
+    .borders-help = चुने गए सेलों की सीमाओं की लाइन मोटाई, लाइनटाइप और रंग सेट करता है; जिन किनारों पर लागू हों उन्हें चुनें।
+    .contents-help = चुने गए सेल की सामग्री को क्रमबद्ध करता है, हटाता है और व्यवस्थित करता है।
+    .block-title = सेल ब्लॉक
+    .format-title = सेल डेटा प्रारूप
+    .block = ब्लॉक
+    .block-name = नाम
+    .browse = ब्राउज़ करें...
+    .block-path = पथ
+    .placement = स्थान
+    .alignment = सेल संरेखण
+    .scale = स्केल
+    .autofit = स्वतः फ़िट
+    .rotation = घूर्णन कोण
+    .format = प्रारूप
+    .current-precision = वर्तमान प्रेसिजन
+    .precision = प्रेसिजन
+    .symbol = प्रतीक
+    .append-symbol = प्रतीक अंत में जोड़ें
+    .negative-parens = ऋणात्मक कोष्ठक में
+    .list-separator = सूची विभाजक
+    .date-format = दिनांक प्रारूप
+    .no-format-settings = इस डेटा प्रकार की कोई प्रारूप सेटिंग नहीं है।
+    .data-type = डेटा प्रकार
+    .format-settings = प्रारूप
+    .currency = मुद्रा
+    .decimal-number = दशमलव संख्या
+    .percentage = प्रतिशत
+    .whole-number = पूर्ण संख्या
+    .grads = ग्रेड
+    .sample-text = नमूना टेक्स्ट
+    .block-help = चुने गए सेलों में ब्लॉक रखता है: उसका स्थान, स्केल (या सेल में फ़िट) और घूर्णन।
+    .format-help = चुने गए सेलों के मान जिस डेटा प्रकार और प्रारूप में पढ़े जाते हैं, उसे सेट करता है।
+    .additional-format = अतिरिक्त प्रारूप
+    .conversion = रूपांतरण गुणक
+    .prefix = उपसर्ग
+    .suffix = प्रत्यय
+    .decimal-separator = दशमलव विभाजक
+    .thousands-separator = हज़ार विभाजक
+    .space = स्पेस
+    .separator-none = (कोई नहीं)
+    .zero-leading = आगे के शून्य
+    .zero-trailing = पीछे के शून्य
+    .zero-feet = 0 फ़ुट
+    .zero-inches = 0 इंच
+    .warning-title = डेटा प्रकार मेल नहीं खाता
+    .warning-heading = इन सेलों में ऐसे मान हैं जो चुने गए डेटा प्रकार के नहीं हैं।
+    .warning-note = रूपांतरण हर मान को नए प्रकार में पढ़ता है; जो मान पढ़ा न जा सके वह साफ़ हो जाता है। रद्द करने पर सेल अपरिवर्तित रहते हैं।
+    .warning-ok = रूपांतरित करें
+    .warning-cancel = रद्द करें
+
+parameters-manager =
+    .action-parameters = क्रिया पैरामीटर
+    .filter = नाम*
+    .search = पैरामीटर खोजें
+    .order = क्रम
+    .polar = ध्रुवीय
+    .visibility = दृश्यता
+    .variable = चर
+    .footer = सभी: { $total } में से { $shown } पैरामीटर दिखाए गए
+
+parameters-manager-feedback =
+    .no-number = इस पंक्ति में संपादन योग्य संख्या नहीं है।
+    .no-flag = इस पंक्ति में बदलने योग्य दृश्यता फ़्लैग नहीं है।
+    .finite-number = परिमित संख्यात्मक पैरामीटर मान दें।
+    .stale-session = ब्लॉक संपादक सत्र अब सक्रिय नहीं है।
+    .positive-length = सकारात्मक पैरामीटर लंबाई दें।
+    .no-direction = पैरामीटर दिशा उपलब्ध नहीं है।
+    .history = पैरामीटर प्रबंधक संपादन
+
+block-action-targets =
+    .prompt = BACTIONSET  ऑब्जेक्ट चुनें या Parameter के बाद बिंदु का नाम लिखें, फिर Enter दबाएँ (Parameter "…"):
+    .create-prompt = BACTION  ऑब्जेक्ट चुनें या Parameter के बाद बिंदु का नाम लिखें, फिर Enter दबाएँ (Parameter "…"):
+    .unique-point = बिंदु पैरामीटर का अद्वितीय नाम दर्ज करें।
+    .empty = क्रिया के लिए कम से कम एक लक्ष्य आवश्यक है।
+    .invalid = इस ब्लॉक से संबंधित समर्थित लक्ष्य चुनें।
+    .stale = क्रिया या ब्लॉक संपादक सत्र बदल गया है; BACTIONSET फिर से शुरू करें।
+    .create-stale = क्रिया या ब्लॉक संपादक सत्र बदल गया है; BACTION फिर से शुरू करें।

@@ -506,13 +506,17 @@ impl OpenCADStudio {
         use crate::ui::dock::{DockDrag, PanelId};
         let mut task = iced::Task::none();
         if open
-            && id == PanelId::AuthoringPalettes
+            && matches!(id, PanelId::AuthoringPalettes | PanelId::ParametersManager)
             && self.tabs[self.active_tab]
                 .active_block_edit_session()
                 .is_none()
         {
-            self.command_line
-                .push_error(crate::t!("Open the Block Editor to use Authoring Palettes.").as_ref());
+            let tool = if id == PanelId::ParametersManager {
+                "Open the Block Editor to use the Parameters Manager."
+            } else {
+                "Open the Block Editor to use Authoring Palettes."
+            };
+            self.command_line.push_error(crate::t!(tool).as_ref());
             return task;
         }
         if open {
@@ -528,13 +532,17 @@ impl OpenCADStudio {
                         self.save_config();
                     }
                     PanelId::BlockPalette => self.open_blocks_palette(None),
+                    PanelId::ParametersManager => {
+                        self.show_parameters_manager = true;
+                        self.dock_open_at_default(id);
+                        self.save_config();
+                    }
                     PanelId::Pi => {
                         self.show_pi_panel = true;
                         self.tabs[self.active_tab].pi_panel.ensure_worker();
                     }
                     PanelId::AuthoringPalettes => {
                         self.show_authoring_palettes = true;
-                        self.ribbon.show_authoring_palettes = true;
                         self.dock_open_at_default(id);
                         self.save_config();
                     }
@@ -584,7 +592,27 @@ impl OpenCADStudio {
             }
             PanelId::AuthoringPalettes => {
                 self.show_authoring_palettes = false;
-                self.ribbon.show_authoring_palettes = false;
+            }
+            PanelId::ParametersManager => {
+                // Closing the pane moves the click off an open cell, which is how
+                // every other route out of a cell applies what was typed. A cell
+                // left on another definition is not this pane's to apply, so it
+                // goes with the pane instead of printing a refusal.
+                let i = self.active_tab;
+                let cell_of_this_session = self.tabs[i]
+                    .parameters_panel
+                    .editing
+                    .as_ref()
+                    .is_some_and(|edit| {
+                        self.tabs[i]
+                            .active_block_edit_session()
+                            .is_some_and(|session| session.br_handle == edit.definition)
+                    });
+                if cell_of_this_session {
+                    let _ = self.commit_parameters_manager(false);
+                }
+                self.show_parameters_manager = false;
+                self.tabs[i].parameters_panel = Default::default();
             }
             PanelId::ExternalReferences => self.show_external_references = false,
             PanelId::Browser => self.show_browser = false,
@@ -687,6 +715,12 @@ impl OpenCADStudio {
         match id {
             PanelId::Properties => self.show_properties,
             PanelId::BlockPalette => self.show_block_palette,
+            PanelId::ParametersManager => {
+                self.show_parameters_manager
+                    && self.tabs[self.active_tab]
+                        .active_block_edit_session()
+                        .is_some()
+            }
             PanelId::Pi => self.show_pi_panel,
             PanelId::AuthoringPalettes => {
                 self.show_authoring_palettes

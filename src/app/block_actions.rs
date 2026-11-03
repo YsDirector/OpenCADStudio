@@ -108,7 +108,7 @@ impl OpenCADStudio {
             }
         }
         if changed != 0 {
-            self.push_undo_snapshot(i, "Reset block references");
+            self.push_undo_snapshot(i, super::document::HistoryLabel::Message("Reset block references"));
             self.apply_action_document(i, staged);
             self.tabs[i].scene.bump_geometry();
             self.tabs[i].dirty = true;
@@ -405,7 +405,7 @@ impl OpenCADStudio {
                 match result {
                     Ok(changed) => {
                         if changed {
-                            self.push_undo_snapshot(i, "Associate block action");
+                            self.push_undo_snapshot(i, super::document::HistoryLabel::Message("Associate block action"));
                             self.apply_action_document(i, staged);
                             self.tabs[i].scene.bump_geometry();
                             self.tabs[i].dirty = true;
@@ -426,6 +426,7 @@ impl OpenCADStudio {
                 definition,
                 action,
                 expected,
+                point_choices,
                 targets,
                 frame,
                 rotate_only,
@@ -434,6 +435,12 @@ impl OpenCADStudio {
                 if tab.id != document
                     || tab.active_block_edit_session().map(|s| s.br_handle) != Some(definition)
                     || tab.scene.document.objects.get(&action) != Some(expected.as_ref())
+                    || point_choices.as_ref().is_some_and(|(source, expected)| {
+                        let current = actions::all_parameters(&tab.scene.document, definition)
+                            .into_iter().filter(|p| p.point && p.id != *source)
+                            .map(|p| (p.handle, p.id, p.name)).collect::<Vec<_>>();
+                        current != *expected
+                    })
                 {
                     self.command_line.push_error(
                         crate::t!(
@@ -452,14 +459,18 @@ impl OpenCADStudio {
                         };
                         let changed = changed || rotation_changed;
                         if changed {
-                            staged = actions::instance::refresh(&staged, definition)?;
+                            staged = actions::instance::refresh_after_edit(
+                                &staged,
+                                &tab.scene.document,
+                                definition,
+                            )?;
                         }
                         Ok(changed)
                     });
                 match result {
                     Ok(changed) => {
                         if changed {
-                            self.push_undo_snapshot(i, "Action selection set");
+                            self.push_undo_snapshot(i, super::document::HistoryLabel::Message("Action selection set"));
                             self.apply_action_document(i, staged);
                             self.tabs[i].scene.bump_geometry();
                             self.tabs[i].dirty = true;
@@ -480,6 +491,7 @@ impl OpenCADStudio {
                 kind,
                 parameter,
                 xy_key_point,
+                point_choices,
                 targets,
                 location,
                 frame,
@@ -497,6 +509,16 @@ impl OpenCADStudio {
                         crate::t!("The action's Block Editor session is no longer active.")
                             .as_ref(),
                     );
+                    return Task::none();
+                }
+                if point_choices.as_ref().is_some_and(|(source, expected)| {
+                    let current = actions::all_parameters(&self.tabs[i].scene.document, definition)
+                        .into_iter().filter(|p| p.point && p.id != *source)
+                        .map(|p| (p.handle, p.id, p.name)).collect::<Vec<_>>();
+                    current != *expected || !actions::all_parameters(&self.tabs[i].scene.document, definition)
+                        .iter().any(|p| p.handle == parameter && p.id == *source)
+                }) {
+                    self.command_line.push_error(crate::tr!("block-action-targets", "create-stale").as_str());
                     return Task::none();
                 }
                 let mut staged = self.tabs[i].scene.document.clone();
@@ -519,10 +541,13 @@ impl OpenCADStudio {
                     } else if !rotate_only.is_empty() {
                         return Err("Rotate-only objects require a Polar Stretch action.");
                     }
+                    if kind == Kind::Move && targets.iter().any(|h| staged.get_entity(*h).is_none()) {
+                        staged = actions::instance::refresh_after_edit(&staged, &self.tabs[i].scene.document, definition)?;
+                    }
                     Ok(handle)
                 }) {
                     Ok(_) => {
-                        self.push_undo_snapshot(i, &format!("{} action", kind.name()));
+                        self.push_undo_snapshot(i, super::document::HistoryLabel::formatted(format!("{} action", kind.name()), "action", super::document::HistoryLabel::Message(kind.name())));
                         self.tabs[i].scene.document = staged;
                         self.tabs[i].scene.bump_geometry();
                         self.tabs[i].dirty = true;
@@ -626,7 +651,7 @@ impl OpenCADStudio {
                 ) {
                     Ok(staged) => {
                         if let Some(staged) = staged {
-                            self.push_undo_snapshot(i, "Test block parameter");
+                            self.push_undo_snapshot(i, super::document::HistoryLabel::Message("Test block parameter"));
                             self.apply_action_document(i, staged);
                             self.tabs[i].scene.bump_geometry();
                             self.tabs[i].dirty = true;
@@ -873,7 +898,7 @@ impl OpenCADStudio {
         match actions::instance::evaluate_value(&tab.scene.document, handle, parameter, local) {
             Ok(staged) => {
                 if let Some(staged) = staged {
-                    self.push_undo_snapshot(i, "Block reference parameter");
+                    self.push_undo_snapshot(i, super::document::HistoryLabel::Message("Block reference parameter"));
                     self.apply_action_document(i, staged);
                     self.tabs[i].scene.bump_geometry();
                     self.tabs[i].dirty = true;

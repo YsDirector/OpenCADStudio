@@ -113,6 +113,13 @@ impl OpenCADStudio {
     /// command, so `was_active` is false and their selection is preserved.
     pub(super) fn apply_cmd_result(&mut self, mut result: CmdResult) -> Task<Message> {
         let i = self.active_tab;
+        // A constraint addition records the geometry its solve moved outside
+        // the command's own list. Only the outermost result owns the record:
+        // a handler that applies a follow-up result must not wipe it.
+        let outermost = self.result_depth == 0;
+        if outermost {
+            self.tabs[i].scene.constraint_network_moves.clear();
+        }
         let panel_updates = self.tabs[i]
             .active_cmd
             .as_mut()
@@ -208,8 +215,18 @@ impl OpenCADStudio {
                 | CmdResult::SolidSubtract { .. }
                 | CmdResult::SliceEntities { .. }
                 | CmdResult::SliceSurfaceEntities { .. }
+                // An array arrow keeps the array selected for the next arrow.
+                | CmdResult::EditAssocArray { .. }
         );
+        self.result_depth += 1;
         let task = self.apply_cmd_result_inner(result);
+        self.result_depth -= 1;
+        // An unwinding panic skips the decrement, but nothing here catches
+        // it: the process ends instead of applying another result with the
+        // counter left high.
+        if outermost {
+            self.report_pending_network_moves(i);
+        }
         let i = self.active_tab;
         // A typed `<angle` does not outlive the command it was typed in.
         if self.tabs[i].active_cmd.is_none() {
@@ -520,6 +537,8 @@ impl OpenCADStudio {
                     crate::ui::window::quick_calc::QuickCalcMsg::Picked(value),
                 ));
             }
+            CmdResult::TableTemplatePick(handle) => self.table_template_pick_done(handle),
+            CmdResult::SetLayerOn { layer, on } => self.set_layer_on_from_command(i, &layer, on),
             CmdResult::OpenTxt2MtxtSettings => self.open_txt2mtxt_settings(),
             CmdResult::OpenAutoConstrainSettings => {
                 self.handle_open_auto_constrain_settings();
@@ -591,6 +610,19 @@ impl OpenCADStudio {
                 if let Some(task) = self.handle_transform_selected(handles, transform) {
                     return task;
                 }
+            }
+            CmdResult::MoveLayerCopies(handles, delta) => {
+                let i = self.active_tab;
+                // Copy + layer + placement share the snapshot taken before copying.
+                self.tabs[i].scene.transform_entities(
+                    &handles,
+                    &crate::command::EntityTransform::Translate(delta),
+                );
+                self.tabs[i].dirty = true;
+                self.tabs[i].scene.clear_preview_wire();
+                self.tabs[i].active_cmd = None;
+                self.tabs[i].snap_result = None;
+                self.refresh_properties();
             }
             CmdResult::CopySelected(handles, transform) => {
                 if let Some(task) = self.handle_copy_selected(handles, transform) {
@@ -968,6 +1000,9 @@ impl OpenCADStudio {
                 offset,
             } => {
                 self.handle_distribute_dimensions(base, dimensions, offset);
+            }
+            CmdResult::EditAssocArray { insert, changes } => {
+                self.handle_edit_assoc_array(insert, changes);
             }
             CmdResult::ReplaceEntity(handle, new_entities) => {
                 if let Some(task) = self.handle_replace_entity(handle, new_entities) {

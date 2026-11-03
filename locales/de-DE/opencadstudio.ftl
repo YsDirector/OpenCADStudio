@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = Schrägstellwinkel
+    .reset-to-style = Auf Stil zurücksetzen (__ocs_fmt_0__)
+    .new-text-style = Neuer Textstil
+    .new-style-from-selection = Neuer Stil aus Auswahl…
+    .update-style-from-selection = „__ocs_fmt_0__“ aus Auswahl aktualisieren
+    .text-style-manager-dialog = Textstil-Verwaltung…
+    .style-updated = Stil '__ocs_fmt_0__' aktualisiert.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = Menüleiste
     .ribbon-tab = Multifunktionsleisten-Register
     .no-matches = Keine passenden Befehle
+    .switch-windows = Fenster wechseln
+    .center-layer = Mittellinienlayer
+    .user-interface = Benutzeroberfläche
+    .no-open-drawings = Keine Zeichnungen geöffnet
+    .viewcube = ViewCube
+    .ucs-icon = BKS-Symbol
+    .file-tabs = Dateiregisterkarten
+    .layout-tabs = Layout-Registerkarten
+    .command-line = Befehlszeile
+    .status-bar = Statusleiste
+    .customize-qat = Schnellzugriff-Werkzeugkasten anpassen
+    .more-commands = Weitere Befehle…
+    .more-commands-title = Befehl zum Schnellzugriff-Werkzeugkasten hinzufügen
+    .find-command-to-add = Befehl zum Hinzufügen eingeben
+    .show-below = Unterhalb der Multifunktionsleiste anzeigen
+    .show-above = Oberhalb der Multifunktionsleiste anzeigen
+    .qat-place-unavailable = Nicht verfügbar, solange die Multifunktionsleiste geschlossen ist
+    .qat-new = Neu
+    .qat-open = Öffnen
+    .qat-save = Speichern
+    .qat-save-as = Speichern unter
+    .qat-plot = Plotten
+    .qat-undo = Rückgängig
+    .qat-redo = Wiederherstellen
+    .qat-measure = Messen
+    .qat-batch-plot = Stapelplot
+    .qat-match-properties = Eigenschaften anpassen
+    .qat-plot-preview = Voransicht
+    .qat-properties = Eigenschaften
+    .add-to-qat = Zum Schnellzugriff-Werkzeugkasten hinzufügen
+    .remove-from-qat = Aus Schnellzugriff-Werkzeugkasten entfernen
+    .add-separator = Trennlinie hinzufügen
+    .remove-separator = Trennlinie entfernen
+    .qat-show-below = Schnellzugriff-Werkzeugkasten unterhalb der Multifunktionsleiste anzeigen
+    .qat-show-above = Schnellzugriff-Werkzeugkasten oberhalb der Multifunktionsleiste anzeigen
+    .return-to-ribbon = Zurück zur Multifunktionsleiste
+    .float-title-side = Gruppentitel seitlich, weitere Werkzeuge öffnen nach rechts
+    .float-title-bottom = Gruppentitel unten, weitere Werkzeuge öffnen nach unten
+    .floating-suffix = {" "}(unverankert)
 
 options =
     .language-section = Sprache
@@ -3532,6 +3578,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: __ocs_fmt_0__ Ebene(n) isoliert.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: Es wurden keine Layer mit LAYISO isoliert.
     .laymatch-select-objects-to-change-layer = LAYMATCH Wählen Sie Objekte aus, um Layer zu ändern:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Zu kopierende Objekte wählen:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Objekt auf dem Ziel-Layer wählen:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH Quellobjekt für die zu übernehmende Ebene auswählen:
@@ -3553,6 +3602,7 @@ layers =
     .layer-s-frozen = Ebene(n) eingefroren.
     .layer-s-locked = Ebene(n) gesperrt.
     .layer-s-turned-off = Layer(s) ausgeschaltet.
+    .layoff-select-object-on-layer-undo = LAYOFF  Objekt auf dem auszuschaltenden Layer wählen oder [Undo]:
     .layer-s-unlocked = Ebene(n) entsperrt.
     .layers = Ebenen: __ocs_fmt_0__
     .lock = Schleusen
@@ -3930,6 +3980,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  Drehwinkel angeben <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE Einführstelle angeben:
+    .tcell-row-above =
+        Zeile oben
+        einfügen
+    .tcell-row-below =
+        Zeile unten
+        einfügen
+    .tcell-delete-rows =
+        Zeilen
+        löschen
+    .tcell-col-left =
+        Spalte links
+        einfügen
+    .tcell-col-right =
+        Spalte rechts
+        einfügen
+    .tcell-delete-cols =
+        Spalten
+        löschen
+    .tcell-merge =
+        Zellen
+        verbinden
+    .tcell-unmerge =
+        Verbindung
+        aufheben
+    .tcell-lock =
+        Zellen-
+        sperre
+    .tcell-edit =
+        Text
+        bearbeiten
+    .tcell-match =
+        Zelle
+        angleichen
+    .tcell-borders =
+        Zellen-
+        rahmen
+    .tcell-format =
+        Daten-
+        format
+    .tcell-block =
+        Block
+        einfügen
+    .tcell-field =
+        Feld
+        einfügen
+    .tcell-contents =
+        Zellinhalt
+        verwalten
+    .tcell-link =
+        Zelle
+        verknüpfen
+    .tcell-download =
+        Aus Quelle
+        herunterladen
+    .tcell-row-style = Zeilenstil
+    .tcell-column-style = Spaltenstil
+    .tcell-width = Zellenbreite
+    .tcell-height = Zellenhöhe
+    .tcell-border-color = Rahmenfarbe
+    .tcell-border-lineweight = Rahmen-Linienstärke
+    .tcell-border-linetype = Rahmen-Linientyp
+    .tcell-locking = Zellensperre
+    .tcell-data-link = Zellen-Datenverknüpfung
+    .tcell-select-destination = Zielzelle wählen:
+    .tcell-select-cell = Tabellenzelle wählen:
+    .tcell-range-first = Erste Ecke des Tabellenzellenbereichs wählen:
+    .tcell-range-second = Zweite Ecke des Tabellenzellenbereichs wählen:
+    .tcell-align-prompt = Zellausrichtung eingeben [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Datenformat eingeben [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Blocknamen eingeben oder [?]:
+    .tcell-formula-prompt = Formel eingeben [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = Nach Zeile/Spalte
+    .tcell-unlocked = Entsperrt
+    .tcell-content-locked = Inhalt gesperrt
+    .tcell-format-locked = Format gesperrt
+    .tcell-content-format-locked = Inhalt und Format gesperrt
+    .tcell-not-linked = Nicht verknüpft
+    .tcell-invalid-cell = Ungültige Zelle.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  Einfügepunkt angeben:
@@ -6526,9 +6654,57 @@ dimstyle =
     .move-text-outside-first = Zuerst Text nach außen verschieben
     .period = Punkt
     .space = Leerzeichen
+    .separator-none = (Keine)
     .surveyors-units = Vermessungseinheiten
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = In dieser Zeichnung
+    .stroke-fonts-shx = Strichschriften (SHX)
+    .font-folders = Schriftordner
+    .truetype-fonts = TrueType-Schriften
+    .font-missing-drawn-with = fehlt · mit __ocs_fmt_0__ gezeichnet
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = „__ocs_fmt_0__“ verwenden
+    .face-regular = Normal
+    .face-bold-italic = Fett Kursiv
+    .font-style = Schriftstil
+    .truetype-fonts-only = Nur TrueType-Schriften
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. 1 Text, der dem Stil folgt, wird aktualisiert.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. __ocs_fmt_3__ Texte, die dem Stil folgen, werden aktualisiert.
+    .style-update-in-blocks = In Blockdefinitionen: __ocs_fmt_0__.
+    .style-update-keeps-one = 1 Text mit eigenem Wert behält ihn.
+    .style-update-keeps-many = __ocs_fmt_0__ Texte mit eigenem Wert behalten ihn.
+    .style-update-xref-undo = Texte in externen Referenzen werden nicht geändert. Ein Rückgängig-Schritt zusammen mit der Stiländerung.
+    .rename-hint = Doppelklick auf einen Namen benennt ihn um.
+    .modified-was = Geändert · war __ocs_fmt_0__
+    .height-asked-hint = 0 = die Höhe wird beim Platzieren des Textes abgefragt.
+    .annotative-paper-hint = Ein: die Höhe oben ist die Papierhöhe.
+    .backward-hint = Rückwärts und Kopfstehend wirken auf einzeiligen Text und Attribute, nicht auf MTEXT.
+    .on-apply = Beim Anwenden
+    .sample-text = Beispieltext
+    .where-used = Verwendung
+    .kind-single-line-text = Einzeiliger Text
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Attributdefinitionen
+    .no-texts-use-style = Kein Text verwendet diesen Stil.
+    .inside-one-block = __ocs_fmt_0__ davon in 1 Blockdefinition.
+    .inside-blocks = __ocs_fmt_0__ davon in __ocs_fmt_1__ Blockdefinitionen.
+    .used-by-one-text = von 1 Text verwendet
+    .used-by-texts = von __ocs_fmt_0__ Texten verwendet
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = Stile importieren
     .select-drawing-to-import-styles-from = Zeichnung zum Importieren von Stilen auswählen
     .select-the-styles-to-import = Zu importierende Stile auswählen
@@ -8021,3 +8197,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Elementanzahl
+    .row-count = Zeilenanzahl
+    .row-and-column-count = Zeilen- und Spaltenanzahl
+    .item-count = Elementanzahl
+    .angle-between-items = Winkel zwischen Elementen
+    .prompt-columns = Anzahl der Spalten angeben (Strg: gesamter Spaltenabstand):
+    .prompt-rows = Anzahl der Zeilen angeben (Strg: gesamter Zeilenabstand):
+    .prompt-rows-columns = Anzahl der Zeilen und Spalten angeben:
+    .prompt-items = Anzahl der Elemente angeben (Strg: Füllwinkel oder Gesamtabstand):
+    .prompt-column-spacing = Abstand zwischen Spalten angeben:
+    .prompt-row-spacing = Abstand zwischen Zeilen angeben:
+    .prompt-item-spacing = Abstand zwischen Elementen angeben:
+    .prompt-item-angle = Winkel zwischen Elementen angeben:
+    .prompt-radius = Radius angeben:
+block-chain =
+    .label = Aktionen verketten
+    .cycle = Die Aktionskette des Blocks enthält einen Zyklus.
+
+block-action-bars =
+    .requires-session = BACTIONBAR erfordert eine aktive Sitzung im Blockeditor.
+    .enable-display = Setzen Sie BACTIONBARMODE auf 1, um Aktionsleisten anzuzeigen.
+    .parameters-changed = Die Parameterliste wurde geändert; starten Sie BACTIONBAR erneut.
+    .display-updated = Die Anzeige der Aktionsleisten wurde aktualisiert.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Parameter wählen, Namen eingeben oder [All] <Ausgewählt>:
+    .prompt-all = BACTIONBAR  Parameter wählen, Namen eingeben oder [All] <All>:
+    .choose-mode = Wählen Sie Show, Hide oder Reset.
+    .unique-parameter = Geben Sie einen eindeutigen Parameternamen ein, wählen Sie seinen Endpunkt oder wählen Sie All.
+    .enter-parameter = Geben Sie einen Parameternamen ein oder wählen Sie All.
+    .pick-endpoint = Wählen Sie einen Parameterendpunkt oder All.
+
+block-construction =
+    .requires-session = BCONSTRUCTION ist nur im Blockeditor verfügbar.
+    .choose-operation = Wählen Sie Convert, Revert, Show oder Hide.
+    .stale-session = Die Blockeditor-Sitzung für die Konstruktionsgeometrie ist nicht mehr aktiv.
+    .changed-count = __ocs_fmt_0__ Geometrieobjekte geändert.
+    .prompt-selection = BCONSTRUCTION  Geometrie wählen oder [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  [Convert/Revert] <Convert> wählen oder die Eingabetaste drücken, um die gewählte Operation anzuwenden:
+    .revert = Zurücksetzen
+    .history = Konstruktionsgeometrie bearbeiten
+    .unsupported-record = Dieser Konstruktionsdatensatz hat eine nicht unterstützte Version oder einen ungültigen Wert.
+    .open-definition = Öffnen Sie eine Blockdefinition, bevor Sie Konstruktionsgeometrie bearbeiten.
+    .missing-object = Ein gewähltes Konstruktionsobjekt ist nicht mehr verfügbar.
+    .active-geometry = Wählen Sie Geometrie in der aktiven Blockdefinition.
+    .locked-layer = Konstruktionsgeometrie kann auf einem gesperrten Layer nicht geändert werden.
+    .revert-layer = Wählen Sie einen vorhandenen entsperrten Layer für die zurückgesetzte Geometrie.
+
+block-authoring-history =
+    .alignment-type = Ausrichtungstyp
+    .action-override = Überschreibung einer Blockaktion bearbeiten
+    .action-chain = Blockaktionskette bearbeiten
+    .action-base = Basispunkt einer Blockaktion bearbeiten
+    .parameter-chain = BEDIT Parameteraktionen verketten
+    .value-set = BEDIT Parameterwertsatz
+    .parameter-metadata = Metadaten eines Blockparameters bearbeiten
+    .authoring-grip = Blockerstellungsgriff
+
+block-operation-history =
+    .reset-references = Blockreferenzen zurücksetzen
+    .associate-action = Blockaktion zuordnen
+    .action-selection = Aktionsauswahlsatz
+    .test-parameter = Testblockparameter
+    .reference-parameter = Blockreferenzparameter
+    .align-reference = Blockreferenz ausrichten
+    .insertion-grip-order = Reihenfolge der Einfügegriffe ändern
+    .move-grip = Nativen Blockgriff verschieben
+    .configure-grips = Blockparametergriffe konfigurieren
+    .lookup-tables = Abruftabellen
+    .hyperlink = Blockhyperlink
+    .properties = Blockeigenschaften
+    .properties-table = Blockeigenschaftentabelle
+    .visibility-state = Sichtbarkeitsstatus
+    .visibility-states = Sichtbarkeitszustände
+
+block-formatted-history =
+    .action = Aktion { $label }
+    .parameter = Parameter { $label }
+    .edit-block = Block { $label } bearbeiten
+    .save-block = Block als { $label } speichern
+    .delete-block = Block { $label } löschen
+
+block-history-kinds =
+    .flip = Umkehren
+    .polar-stretch = Polar strecken
+    .basepoint = Basispunkt
+    .lookup = Abruf
+
+block-action-properties =
+    .base-point = Aktionsbasispunkt
+    .overrides = Aktionsüberschreibungen
+    .multiplier = Abstandsfaktor
+    .angle-offset = Winkelversatz (Grad)
+    .chain = Aktionskette
+    .chain-to = Verketten mit
+
+block-parameter-properties =
+    .show-properties = In Eigenschaften anzeigen
+    .parameter-name = Parametername
+    .grip-count = Anzahl der Griffe
+    .dependent-base = Abhängiger Basispunkt
+    .offset-x = Basisversatz X
+    .offset-y = Basisversatz Y
+    .base-grip = Position des Basisgriffs
+    .end-grip = Position des Endgriffs
+    .x-grip = Position des X-Griffs
+    .y-grip = Position des Y-Griffs
+
+block-value-set =
+    .use-min = Minimum für { $label } verwenden
+    .use-max = Maximum für { $label } verwenden
+    .use-increment = Schrittweite für { $label } verwenden
+    .use-list = Liste zulässiger Werte für { $label } verwenden
+    .min = Minimum für { $label }
+    .max = Maximum für { $label }
+    .increment = Schrittweite für { $label }
+    .values = Zulässige Werte für { $label }
+    .title = Wertesatz
+    .x-distance = X-Abstand
+    .y-distance = Y-Abstand
+
+table-style-cells =
+    .tbl-start-from-style = Von Tabellenstil beginnen
+    .tbl-extra-columns = Zusätzliche Spalten
+    .tbl-extra-rows = Zusätzliche Zeilen
+    .tbl-keep-from-template = Aus der Starttabelle übernehmen:
+    .tbl-keep-label-text = Text der Beschriftungszellen
+    .tbl-keep-data-text = Text der Datenzellen
+    .tbl-keep-overrides = Zellstil-Überschreibungen
+    .tbl-keep-links = Datenverknüpfungen
+    .tbl-keep-fields = Felder
+    .tbl-keep-formulas = Formeln
+    .tbl-extra-whole = Zusätzliche Zeilen und Spalten müssen ganze Zahlen sein.
+    .from-style-insertion = __ocs_arg_n__  Einfügepunkt angeben oder [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Namen eines Tabellenstils eingeben oder [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Anzahl zusätzlicher Zeilen eingeben <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Anzahl zusätzlicher Spalten eingeben <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Einfügeoption eingeben [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  __ocs_arg_what__ in eingefügte Tabelle übernehmen? [Yes/No] <__ocs_arg_current__>:
+    .label-text = Beschriftungstext
+    .data-text = Datentext
+    .formulas = Formeln
+    .fields = Felder
+    .data-links = Datenverknüpfungen
+    .blocks = Blöcke
+    .cell-style-overrides = Zellstil-Überschreibungen
+    .style-name-header = Tabellenstilname
+    .no-starting-table = Der Tabellenstil enthält keine Tabelle.
+    .select-table = Tabelle wählen:
+    .not-a-table = Das Objekt ist keine Tabelle.
+    .cell-style-exists = Ein Zellstil mit diesem Namen existiert bereits.
+    .cell-style-in-use = Der Zellstil wird verwendet und kann nicht gelöscht werden.
+    .template-size = __ocs_arg_rows__ Zeilen × __ocs_arg_columns__ Spalten
+    .cell-properties = Zelleigenschaften
+    .cell-text = Zelltext
+    .cell-borders = Zellrahmen
+    .cell-styles = Zellstile
+    .label = Beschriftung
+    .margins = Ränder
+    .merge-on-create = Zellen beim Erstellen von Zeilen/Spalten verbinden
+    .new-from-this = Neu aus diesem
+    .new-name = Neuer Name
+    .real-number = Reelle Zahl
+    .whole-number = Ganze Zahl
+    .select-table-button = Tabelle wählen…
+    .starting-table = Starttabelle
+    .table-direction = Tabellenrichtung
+
+table-cells =
+    .borders-title = Zellrahmen
+    .contents-title = Zellinhalt
+    .line = Linie
+    .lineweight = Linienstärke
+    .linetype = Linientyp
+    .color = Farbe
+    .double = Doppellinie
+    .spacing = Abstand
+    .apply-to = Anwenden auf
+    .all = Alle
+    .outside = Außen
+    .inside = Innen
+    .none = Keine
+    .top = Oben
+    .bottom = Unten
+    .left = Links
+    .right = Rechts
+    .inside-horizontal = Innen horizontal
+    .inside-vertical = Innen vertikal
+    .contents = Inhalt
+    .empty = Die Zelle ist leer.
+    .move-up = Nach oben
+    .move-down = Nach unten
+    .delete = Löschen
+    .layout = Layout
+    .flow = Fließend
+    .stack-horizontal = Horizontal gestapelt
+    .stack-vertical = Vertikal gestapelt
+    .content-spacing = Abstand
+    .block-item = Block: { $name }
+    .text-item = Text: { $text }
+    .text-content = Tabellenzellentext
+    .borders-help = Legt Linienstärke, Linientyp und Farbe der Rahmen der gewählten Zellen fest; wählen Sie die betroffenen Kanten.
+    .contents-help = Ordnet, entfernt und gestaltet den Inhalt der gewählten Zelle.
+    .block-title = Zellenblock
+    .format-title = Zellendatenformat
+    .block = Block
+    .block-name = Name
+    .browse = Durchsuchen...
+    .block-path = Pfad
+    .placement = Platzierung
+    .alignment = Zellausrichtung
+    .scale = Maßstab
+    .autofit = Automatisch anpassen
+    .rotation = Drehwinkel
+    .format = Format
+    .current-precision = Aktuelle Genauigkeit
+    .precision = Genauigkeit
+    .symbol = Symbol
+    .append-symbol = Symbol anhängen
+    .negative-parens = Negative Werte in Klammern
+    .list-separator = Listentrennzeichen
+    .date-format = Datumsformat
+    .no-format-settings = Dieser Datentyp hat keine Formateinstellungen.
+    .data-type = Datentyp
+    .format-settings = Format
+    .currency = Währung
+    .decimal-number = Dezimalzahl
+    .percentage = Prozent
+    .whole-number = Ganze Zahl
+    .grads = Neugrad
+    .sample-text = Beispieltext
+    .block-help = Fügt einen Block in die gewählten Zellen ein: Position, Maßstab (oder an die Zelle angepasst) und Drehung.
+    .format-help = Legt Datentyp und Format fest, mit denen die Werte der gewählten Zellen gelesen werden.
+    .additional-format = Zusätzliches Format
+    .conversion = Umrechnungsfaktor
+    .prefix = Präfix
+    .suffix = Suffix
+    .decimal-separator = Dezimaltrennzeichen
+    .thousands-separator = Tausendertrennzeichen
+    .space = Leerzeichen
+    .separator-none = (Keine)
+    .zero-leading = Führende Nullen
+    .zero-trailing = Nachgestellte Nullen
+    .zero-feet = 0 Fuß
+    .zero-inches = 0 Zoll
+    .warning-title = Datentyp stimmt nicht überein
+    .warning-heading = Diese Zellen enthalten Werte, die nicht dem gewählten Datentyp entsprechen.
+    .warning-note = Beim Konvertieren wird jeder Wert als neuer Typ gelesen; nicht lesbare Werte werden gelöscht. Abbrechen lässt die Zellen unverändert.
+    .warning-ok = Konvertieren
+    .warning-cancel = Abbrechen
+
+parameters-manager =
+    .action-parameters = Aktionsparameter
+    .filter = Name*
+    .search = Parameter suchen
+    .order = Reihenfolge
+    .polar = Polar
+    .visibility = Sichtbarkeit
+    .variable = Variable
+    .footer = Alle: { $shown } von { $total } Parametern angezeigt
+
+parameters-manager-feedback =
+    .no-number = Diese Zeile enthält keine bearbeitbare Zahl.
+    .no-flag = Diese Zeile enthält kein änderbares Sichtbarkeitsmerkmal.
+    .finite-number = Geben Sie einen endlichen numerischen Parameterwert an.
+    .stale-session = Die Blockeditor-Sitzung ist nicht mehr aktiv.
+    .positive-length = Geben Sie eine positive Parameterlänge an.
+    .no-direction = Die Parameterrichtung ist nicht verfügbar.
+    .history = Parametermanager bearbeiten
+
+block-action-targets =
+    .prompt = BACTIONSET  Objekte wählen oder Parameter und einen Punktnamen eingeben, dann Eingabe drücken (Parameter "…"):
+    .create-prompt = BACTION  Objekte wählen oder Parameter und einen Punktnamen eingeben, dann Eingabe drücken (Parameter "…"):
+    .unique-point = Geben Sie einen eindeutigen Punktparameternamen ein.
+    .empty = Eine Aktion benötigt mindestens ein Ziel.
+    .invalid = Wählen Sie unterstützte Ziele in diesem Block.
+    .stale = Die Aktion oder Blockeditor-Sitzung wurde geändert; starten Sie BACTIONSET erneut.
+    .create-stale = Die Aktion oder Blockeditor-Sitzung wurde geändert; starten Sie BACTION erneut.

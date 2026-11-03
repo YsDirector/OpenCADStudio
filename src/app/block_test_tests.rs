@@ -410,6 +410,87 @@ fn visibility_reference() -> (OpenCADStudio, usize, Handle, usize) {
     (app, test, reference, hidden)
 }
 
+/// A member the definition itself hides is governed by no state, so choosing a
+/// state on a reference leaves it hidden rather than painting it back in.
+#[test]
+fn block_visibility_state_leaves_a_definition_hidden_member_hidden() {
+    use crate::scene::block_visibility;
+    let (mut app, source, _) = fixture();
+    let (shutter, hidden) = {
+        let doc = &mut app.tabs[source].scene.document;
+        let owner = doc.block_records.get("SAMPLE").unwrap().handle;
+        let mut shutter = Line::from_points(
+            Vector3::new(10.0, 24.0, 0.0),
+            Vector3::new(15.0, 24.0, 0.0),
+        );
+        shutter.common.owner_handle = owner;
+        shutter.common.invisible = true;
+        let shutter = doc.add_entity(EntityType::Line(shutter)).unwrap();
+        let mut frame = Line::from_points(
+            Vector3::new(10.0, 21.0, 0.0),
+            Vector3::new(15.0, 21.0, 0.0),
+        );
+        frame.common.owner_handle = owner;
+        let frame = doc.add_entity(EntityType::Line(frame)).unwrap();
+        let parameter = block_visibility::create(doc, owner, Vector3::ZERO).unwrap();
+        let hidden = block_visibility::add_state(doc, parameter, "WindowHidden", 0).unwrap();
+        block_visibility::set_visible(doc, parameter, hidden, &[frame], false);
+        assert!(
+            !block_visibility::parameter(doc, owner)
+                .unwrap()
+                .all_blocks
+                .contains(&shutter),
+            "the state set must not govern what the definition already hides"
+        );
+        (shutter, hidden)
+    };
+
+    let _ = app.open_block_test(source);
+    let test = app.active_tab;
+    let reference = {
+        let doc = &app.tabs[test].scene.document;
+        let model = doc.header.model_space_block_handle;
+        doc.entities()
+            .find(|entity| {
+                entity.common().owner_handle == model && matches!(entity, EntityType::Insert(_))
+            })
+            .unwrap()
+            .common()
+            .handle
+    };
+    app.apply_visibility_state(reference, hidden);
+    app.finish_pending_history(test);
+
+    let doc = &app.tabs[test].scene.document;
+    let EntityType::Insert(insert) = doc.get_entity(reference).unwrap() else {
+        unreachable!()
+    };
+    assert_ne!(
+        insert.block_name, "SAMPLE",
+        "the reference was never given its own copy, so no state was applied to it"
+    );
+    let shown: Vec<f64> = doc
+        .entities_in_block(&insert.block_name)
+        .filter(|entity| !entity.common().invisible)
+        .filter_map(|entity| match entity {
+            EntityType::Line(line) => Some(line.start.y),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !shown.contains(&24.0),
+        "choosing a state showed `{shutter:?}`, which the definition hides and the state never governs"
+    );
+    assert!(
+        !shown.contains(&21.0),
+        "the state has to hide the member it governs and does not list: {shown:?}"
+    );
+    assert!(
+        shown.contains(&20.0),
+        "an object the state governs and lists still has to show: {shown:?}"
+    );
+}
+
 /// A state hides only the objects its parameter controls. A reference to the
 /// definition keeps drawing the members the state never mentions.
 #[test]
@@ -792,6 +873,12 @@ fn block_test_attributes_use_defaults_and_the_stored_base_point() {
     let definition = doc
         .add_entity(EntityType::AttributeDefinition(attribute))
         .unwrap();
+    let mut fixed = AttributeDefinition::new("FIXED".into(), "Fixed".into(), "always".into());
+    fixed.insertion_point = Vector3::new(12.0, 24.0, 0.0);
+    fixed.common.owner_handle = owner;
+    fixed.flags.constant = true;
+    doc.add_entity(EntityType::AttributeDefinition(fixed))
+        .unwrap();
     let _ = app.open_block_test(source);
     let doc = &app.tabs[app.active_tab].scene.document;
     let model = doc.header.model_space_block_handle;
@@ -802,13 +889,27 @@ fn block_test_attributes_use_defaults_and_the_stored_base_point() {
             _ => None,
         })
         .unwrap();
-    assert_eq!(insert.attributes.len(), 1);
-    let attribute = &insert.attributes[0];
+    assert_eq!(
+        insert.attributes.len(),
+        2,
+        "a constant attribute is never asked for, but it still belongs to the reference"
+    );
+    let attribute = insert
+        .attributes
+        .iter()
+        .find(|attribute| attribute.tag == "TAG")
+        .expect("the ordinary attribute");
     assert_eq!(attribute.value, "default");
     assert_eq!(attribute.insertion_point, Vector3::new(2.0, 3.0, 0.0));
     assert_eq!(attribute.attdef_handle, definition);
     assert!(!attribute.common.handle.is_null());
     assert_eq!(attribute.common.owner_handle, insert.common.handle);
+    let fixed = insert
+        .attributes
+        .iter()
+        .find(|attribute| attribute.tag == "FIXED")
+        .expect("the constant attribute");
+    assert_eq!(fixed.value, "always");
 }
 
 #[test]

@@ -1832,6 +1832,7 @@ pub enum CmdResult {
         definition: Handle,
         action: Handle,
         expected: Box<codec::objects::ObjectType>,
+        point_choices: Option<(i32, Vec<(Handle, i32, String)>)>,
         targets: Vec<Handle>,
         frame: Option<Vec<DVec3>>,
         rotate_only: Option<Vec<Handle>>,
@@ -1856,6 +1857,7 @@ pub enum CmdResult {
         kind: crate::scene::block_actions::Kind,
         parameter: Handle,
         xy_key_point: Option<crate::scene::block_actions::XyKeyPoint>,
+        point_choices: Option<(i32, Vec<(Handle, i32, String)>)>,
         targets: Vec<Handle>,
         location: DVec3,
         frame: Option<Vec<DVec3>>,
@@ -1953,6 +1955,11 @@ pub enum CmdResult {
     /// A QuickCalc pick finished: the point, distance or angle it measured,
     /// for the pallet's input.
     QuickCalcPick(crate::app::calc::Value),
+    /// The Table Style window's starting-table pick ended: the picked
+    /// object, or none when the pick was left with Enter or Esc.
+    TableTemplatePick(Option<Handle>),
+    /// Turn a layer off (or back on) and keep the command for its next pick.
+    SetLayerOn { layer: String, on: bool },
     /// Command is still waiting for the next point; show updated prompt.
     NeedPoint,
     /// Update the committed-segment wire (normal colour) and keep collecting points.
@@ -2363,6 +2370,12 @@ pub enum CmdResult {
         dimensions: Vec<Handle>,
         offset: Option<f64>,
     },
+    /// An associative array arrow grip: set these parameters on the array
+    /// referenced by `insert` and rebuild its items.
+    EditAssocArray {
+        insert: Handle,
+        changes: Vec<(&'static str, f64)>,
+    },
     /// Cancel: discard any preview and end the command.
     Cancel,
     /// Cleanly end the command without reporting cancellation.
@@ -2403,12 +2416,14 @@ pub enum CmdResult {
     /// empty selection.
     Script(String),
     /// Move `dest` entities to the layer of the `src` entity, or put copies
-    /// of them there when `copy` is set; end command.
+    /// of them there when `copy` is set and offer placement of those copies.
     MatchEntityLayer {
         dest: Vec<Handle>,
         src: Handle,
         copy: bool,
     },
+    /// Translate the copies already owned by COPYTOLAYER's undo snapshot; end command.
+    MoveLayerCopies(Vec<Handle>, DVec3),
     /// Copy all visual properties (layer/color/linetype/lineweight) from `src` to `dest`; end command.
     MatchProperties {
         dest: Vec<Handle>,
@@ -3040,6 +3055,11 @@ impl CommandSuggestion {
 }
 
 pub trait CadCommand: Send {
+    /// The table cell this command edits (table, row, column): Tab and
+    /// Shift+Tab move its editor to the next or previous cell.
+    fn table_cell(&self) -> Option<(Handle, usize, usize)> {
+        None
+    }
     /// Preserve source appearance for commands that extract existing entities.
     fn preserve_commit_style(&self) -> bool {
         false
@@ -3670,6 +3690,41 @@ pub trait CadCommand: Send {
         false
     }
 
+    /// Consume an eligible Block Editor marker click while gathering a selection.
+    /// The returned name is drawing-authored and is shown as selection feedback.
+    fn on_selection_marker_click(
+        &mut self,
+        _scene: &Scene,
+        _position: iced::Point,
+        _context: PointPickContext,
+        _remove: bool,
+        _replace: bool,
+    ) -> Option<String> {
+        None
+    }
+
+    /// Whether a Point marker is in this command's pending target selection.
+    fn selection_marker_selected(&self, _handle: Handle) -> bool {
+        false
+    }
+
+    /// Clear pending marker selections when an entity pick replaces the set.
+    fn clear_selection_markers(&mut self) {}
+
+    /// Gather eligible Block Editor markers within a viewport selection region.
+    fn on_selection_marker_region(
+        &mut self,
+        _scene: &Scene,
+        _polygon: &[iced::Point],
+        _context: PointPickContext,
+        _crossing: bool,
+        _remove: bool,
+        _replace: bool,
+        _geometry_hit: bool,
+    ) -> Vec<String> {
+        Vec::new()
+    }
+
     /// The command takes associative dimensions only. The host drops every
     /// other object from a completed selection, says how many it dropped, and
     /// hands the command what is left.
@@ -3972,6 +4027,21 @@ mod constraint_registry_tests {
                 "{target} must validate in ALIASEDIT"
             );
         }
+        // Every command the shipped alias file points at validates too (#2452).
+        let unknown: Vec<&str> = include_str!("../assets/ocad.pgp")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with(';'))
+            .filter_map(|line| line.split_once(','))
+            .filter_map(|(_, target)| target.trim().strip_prefix('*'))
+            // fork: the OCSM aliases (TF/GDIM/D2G/DK/ZX/OH/BOM…, plus XL/CC) point at
+            // plugin commands. Those register only while the OCSMechanical plugin is
+            // loaded, so a host-side registry can never list them; the plugin's own
+            // `command_prefixes` is where they are declared.
+            .filter(|target| !target.to_ascii_uppercase().starts_with("OCSM"))
+            .filter(|target| !names.iter().any(|name| name.eq_ignore_ascii_case(target)))
+            .collect();
+        assert!(unknown.is_empty(), "alias targets missing from the registry: {unknown:?}");
     }
 
     /// Ensures every constraint command remains discoverable by autocomplete

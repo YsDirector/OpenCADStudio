@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = زاوية الميل
+    .reset-to-style = إعادة إلى النمط (__ocs_fmt_0__)
+    .new-text-style = نمط نص جديد
+    .new-style-from-selection = نمط جديد من التحديد…
+    .update-style-from-selection = تحديث "__ocs_fmt_0__" من التحديد
+    .text-style-manager-dialog = مدير أنماط النص…
+    .style-updated = حُدِّث النمط '__ocs_fmt_0__'.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = شريط القوائم
     .ribbon-tab = علامة تبويب الشريط
     .no-matches = لا توجد أوامر مطابقة
+    .switch-windows = تبديل النوافذ
+    .center-layer = طبقة خطوط المركز
+    .user-interface = واجهة المستخدم
+    .no-open-drawings = لا توجد رسومات مفتوحة
+    .viewcube = ViewCube
+    .ucs-icon = أيقونة نظام الإحداثيات UCS
+    .file-tabs = علامات تبويب الملفات
+    .layout-tabs = علامات تبويب التخطيط
+    .command-line = سطر الأوامر
+    .status-bar = شريط الحالة
+    .customize-qat = تخصيص شريط أدوات الوصول السريع
+    .more-commands = مزيد من الأوامر…
+    .more-commands-title = إضافة أمر إلى شريط أدوات الوصول السريع
+    .find-command-to-add = اكتب أمرًا لإضافته
+    .show-below = إظهار أسفل الشريط
+    .show-above = إظهار أعلى الشريط
+    .qat-place-unavailable = غير متاح أثناء إغلاق الشريط
+    .qat-new = جديد
+    .qat-open = فتح
+    .qat-save = حفظ
+    .qat-save-as = حفظ باسم
+    .qat-plot = طباعة
+    .qat-undo = تراجع
+    .qat-redo = إعادة
+    .qat-measure = قياس
+    .qat-batch-plot = طباعة دفعية
+    .qat-match-properties = مطابقة الخصائص
+    .qat-plot-preview = معاينة الطباعة
+    .qat-properties = الخصائص
+    .add-to-qat = إضافة إلى شريط أدوات الوصول السريع
+    .remove-from-qat = إزالة من شريط أدوات الوصول السريع
+    .add-separator = إضافة فاصل
+    .remove-separator = إزالة الفاصل
+    .qat-show-below = إظهار شريط أدوات الوصول السريع أسفل الشريط
+    .qat-show-above = إظهار شريط أدوات الوصول السريع أعلى الشريط
+    .return-to-ribbon = إرجاع إلى الشريط
+    .float-title-side = عنوان اللوحة على الجانب، والأدوات الإضافية تفتح إلى اليمين
+    .float-title-bottom = عنوان اللوحة في الأسفل، والأدوات الإضافية تفتح إلى الأسفل
+    .floating-suffix = {" "}(عائمة)
 
 options =
     .language-section = اللغة
@@ -3544,6 +3590,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: عُزلت __ocs_fmt_0__ طبقة.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: لم يتم عزل أي طبقات بواسطة LAYISO.
     .laymatch-select-objects-to-change-layer = LAYMATCH  حدد الكائنات المراد تغيير طبقتها:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  حدد الكائنات المراد نسخها:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  حدد كائنًا على الطبقة الهدف:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  حدد الكائن المصدر لمطابقة طبقته:
@@ -3565,6 +3614,7 @@ layers =
     .layer-s-frozen = جُمّدت الطبقات.
     .layer-s-locked = قُفلت الطبقات.
     .layer-s-turned-off = أُوقفت الطبقات.
+    .layoff-select-object-on-layer-undo = LAYOFF  حدد كائنًا على الطبقة المراد إيقاف تشغيلها أو [Undo]:
     .layer-s-unlocked = أُلغي قفل الطبقات.
     .layers = الطبقات: __ocs_fmt_0__
     .lock = قفل
@@ -3942,6 +3992,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  حدد زاوية الدوران <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE  حدد نقطة الإدراج:
+    .tcell-row-above =
+        إدراج صف
+        أعلى
+    .tcell-row-below =
+        إدراج صف
+        أسفل
+    .tcell-delete-rows =
+        حذف
+        الصفوف
+    .tcell-col-left =
+        إدراج عمود
+        يسارًا
+    .tcell-col-right =
+        إدراج عمود
+        يمينًا
+    .tcell-delete-cols =
+        حذف
+        الأعمدة
+    .tcell-merge =
+        دمج
+        الخلايا
+    .tcell-unmerge =
+        إلغاء دمج
+        الخلايا
+    .tcell-lock =
+        قفل
+        الخلية
+    .tcell-edit =
+        تحرير
+        النص
+    .tcell-match =
+        مطابقة
+        الخلية
+    .tcell-borders =
+        حدود
+        الخلية
+    .tcell-format =
+        تنسيق
+        البيانات
+    .tcell-block =
+        إدراج
+        كتلة
+    .tcell-field =
+        إدراج
+        حقل
+    .tcell-contents =
+        إدارة محتويات
+        الخلية
+    .tcell-link =
+        ربط
+        الخلية
+    .tcell-download =
+        تنزيل
+        من المصدر
+    .tcell-row-style = نمط الصف
+    .tcell-column-style = نمط العمود
+    .tcell-width = عرض الخلية
+    .tcell-height = ارتفاع الخلية
+    .tcell-border-color = لون الحد
+    .tcell-border-lineweight = سمك خط الحد
+    .tcell-border-linetype = نوع خط الحد
+    .tcell-locking = قفل الخلية
+    .tcell-data-link = ارتباط بيانات الخلية
+    .tcell-select-destination = حدد الخلية الوجهة:
+    .tcell-select-cell = حدد خلية الجدول:
+    .tcell-range-first = حدد الزاوية الأولى لنطاق خلايا الجدول:
+    .tcell-range-second = حدد الزاوية الثانية لنطاق خلايا الجدول:
+    .tcell-align-prompt = أدخل محاذاة الخلية [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = أدخل تنسيق البيانات [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = أدخل اسم الكتلة أو [?]:
+    .tcell-formula-prompt = أدخل صيغة [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = حسب الصف/العمود
+    .tcell-unlocked = غير مقفل
+    .tcell-content-locked = المحتوى مقفل
+    .tcell-format-locked = التنسيق مقفل
+    .tcell-content-format-locked = المحتوى والتنسيق مقفلان
+    .tcell-not-linked = غير مرتبط
+    .tcell-invalid-cell = خلية غير صالحة.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  حدد نقطة الإدراج:
@@ -6540,9 +6668,57 @@ dimstyle =
     .move-text-outside-first = نقل النص إلى الخارج أولًا
     .period = نقطة
     .space = مسافة
+    .separator-none = (بلا)
     .surveyors-units = وحدات المسّاح
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = في هذا الرسم
+    .stroke-fonts-shx = خطوط الخطوط (SHX)
+    .font-folders = مجلدات الخطوط
+    .truetype-fonts = خطوط TrueType
+    .font-missing-drawn-with = مفقود · يُرسم بخط __ocs_fmt_0__
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = استخدام "__ocs_fmt_0__"
+    .face-regular = عادي
+    .face-bold-italic = غامق مائل
+    .font-style = نمط الخط
+    .truetype-fonts-only = خطوط TrueType فقط
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. يتم تحديث نص واحد يتبع النمط.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. عدد النصوص التي تتبع النمط ويتم تحديثها: __ocs_fmt_3__.
+    .style-update-in-blocks = داخل تعريفات الكتل: __ocs_fmt_0__.
+    .style-update-keeps-one = نص واحد بقيمة خاصة يحتفظ بها.
+    .style-update-keeps-many = عدد النصوص ذات القيم الخاصة التي تحتفظ بها: __ocs_fmt_0__.
+    .style-update-xref-undo = لا تتغير النصوص في المراجع الخارجية. خطوة تراجع واحدة مع تغيير النمط.
+    .rename-hint = انقر نقرًا مزدوجًا على الاسم لإعادة تسميته.
+    .modified-was = معدّل · كان __ocs_fmt_0__
+    .height-asked-hint = 0 = يُطلب الارتفاع عند وضع النص.
+    .annotative-paper-hint = مفعّل: الارتفاع أعلاه هو ارتفاع الورق.
+    .backward-hint = الاتجاه العكسي والمقلوب يؤثران في النص أحادي السطر والسمات، لا في MTEXT.
+    .on-apply = عند التطبيق
+    .sample-text = نص العينة
+    .where-used = أماكن الاستخدام
+    .kind-single-line-text = نص أحادي السطر
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = تعريفات السمات
+    .no-texts-use-style = لا توجد نصوص تستخدم هذا النمط.
+    .inside-one-block = __ocs_fmt_0__ منها داخل تعريف كتلة واحد.
+    .inside-blocks = __ocs_fmt_0__ منها داخل __ocs_fmt_1__ من تعريفات الكتل.
+    .used-by-one-text = مستخدم في نص واحد
+    .used-by-texts = مستخدم في __ocs_fmt_0__ من النصوص
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = استيراد الأنماط
     .select-drawing-to-import-styles-from = حدد الرسم الذي تُستورد منه الأنماط
     .select-the-styles-to-import = حدد الأنماط المراد استيرادها
@@ -8026,3 +8202,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = عدد العناصر
+    .row-count = عدد الصفوف
+    .row-and-column-count = عدد الصفوف والأعمدة
+    .item-count = عدد العناصر
+    .angle-between-items = الزاوية بين العناصر
+    .prompt-columns = حدد عدد الأعمدة (Ctrl: إجمالي تباعد الأعمدة):
+    .prompt-rows = حدد عدد الصفوف (Ctrl: إجمالي تباعد الصفوف):
+    .prompt-rows-columns = حدد عدد الصفوف والأعمدة:
+    .prompt-items = حدد عدد العناصر (Ctrl: زاوية التعبئة أو إجمالي التباعد):
+    .prompt-column-spacing = حدد المسافة بين الأعمدة:
+    .prompt-row-spacing = حدد المسافة بين الصفوف:
+    .prompt-item-spacing = حدد المسافة بين العناصر:
+    .prompt-item-angle = حدد الزاوية بين العناصر:
+    .prompt-radius = حدد نصف القطر:
+block-chain =
+    .label = الإجراءات المتسلسلة
+    .cycle = تحتوي سلسلة إجراءات الكتلة على دورة.
+
+block-action-bars =
+    .requires-session = يتطلب BACTIONBAR جلسة نشطة في محرر الكتل.
+    .enable-display = اضبط BACTIONBARMODE على 1 لعرض أشرطة الإجراءات.
+    .parameters-changed = تغيرت قائمة المعلمات؛ أعد تشغيل BACTIONBAR.
+    .display-updated = تم تحديث عرض أشرطة الإجراءات.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  حدد معلمة أو أدخل اسمها أو [All] <المحدد>:
+    .prompt-all = BACTIONBAR  حدد معلمة أو أدخل اسمها أو [All] <All>:
+    .choose-mode = اختر Show أو Hide أو Reset.
+    .unique-parameter = أدخل اسم معلمة فريدًا أو حدد نقطة نهايتها أو اختر All.
+    .enter-parameter = أدخل اسم معلمة أو اختر All.
+    .pick-endpoint = حدد نقطة نهاية معلمة أو اختر All.
+
+block-construction =
+    .requires-session = يتوفر BCONSTRUCTION في محرر الكتل فقط.
+    .choose-operation = اختر Convert أو Revert أو Show أو Hide.
+    .stale-session = لم تعد جلسة محرر الكتل الخاصة بالهندسة الإنشائية نشطة.
+    .changed-count = تم تغيير __ocs_fmt_0__ من الكائنات الهندسية.
+    .prompt-selection = BCONSTRUCTION  حدد عناصر هندسية أو [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  اختر [Convert/Revert] <Convert>، أو اضغط Enter لتطبيق العملية المحددة:
+    .revert = استعادة
+    .history = تحرير الهندسة الإنشائية
+    .unsupported-record = إصدار سجل الهندسة الإنشائية هذا أو قيمته غير مدعوم.
+    .open-definition = افتح تعريف كتلة قبل تحرير الهندسة الإنشائية.
+    .missing-object = لم يعد أحد كائنات الهندسة الإنشائية المحددة متاحًا.
+    .active-geometry = حدد عناصر هندسية في تعريف الكتلة النشط.
+    .locked-layer = لا يمكن تغيير الهندسة الإنشائية على طبقة مقفلة.
+    .revert-layer = اختر طبقة موجودة وغير مقفلة للعناصر الهندسية المستعادة.
+
+block-authoring-history =
+    .alignment-type = نوع المحاذاة
+    .action-override = تحرير تجاوز إجراء الكتلة
+    .action-chain = تحرير سلسلة إجراءات الكتلة
+    .action-base = تحرير نقطة أساس إجراء الكتلة
+    .parameter-chain = BEDIT تسلسل إجراءات المعلمة
+    .value-set = BEDIT مجموعة قيم المعلمة
+    .parameter-metadata = تحرير بيانات معلمة الكتلة الوصفية
+    .authoring-grip = مقبض تأليف الكتلة
+
+block-operation-history =
+    .reset-references = إعادة تعيين مراجع الكتلة
+    .associate-action = ربط إجراء الكتلة
+    .action-selection = مجموعة تحديد الإجراء
+    .test-parameter = معلمة كتلة الاختبار
+    .reference-parameter = معلمة مرجع الكتلة
+    .align-reference = محاذاة مرجع الكتلة
+    .insertion-grip-order = تغيير ترتيب مقابض الإدراج
+    .move-grip = نقل مقبض الكتلة الأصلي
+    .configure-grips = تكوين مقابض معلمات الكتلة
+    .lookup-tables = جداول البحث
+    .hyperlink = ارتباط الكتلة التشعبي
+    .properties = خصائص الكتلة
+    .properties-table = جدول خصائص الكتلة
+    .visibility-state = حالة الرؤية
+    .visibility-states = حالات الرؤية
+
+block-formatted-history =
+    .action = إجراء { $label }
+    .parameter = معلمة { $label }
+    .edit-block = تحرير الكتلة { $label }
+    .save-block = حفظ الكتلة باسم { $label }
+    .delete-block = حذف الكتلة { $label }
+
+block-history-kinds =
+    .flip = قلب
+    .polar-stretch = تمديد قطبي
+    .basepoint = نقطة الأساس
+    .lookup = بحث
+
+block-action-properties =
+    .base-point = نقطة أساس الإجراء
+    .overrides = تجاوزات الإجراء
+    .multiplier = معامل المسافة
+    .angle-offset = إزاحة الزاوية (درجات)
+    .chain = سلسلة الإجراءات
+    .chain-to = الربط بـ
+
+block-parameter-properties =
+    .show-properties = إظهار في الخصائص
+    .parameter-name = اسم المعلمة
+    .grip-count = عدد المقابض
+    .dependent-base = نقطة أساس تابعة
+    .offset-x = إزاحة الأساس X
+    .offset-y = إزاحة الأساس Y
+    .base-grip = موضع مقبض الأساس
+    .end-grip = موضع مقبض النهاية
+    .x-grip = موضع مقبض X
+    .y-grip = موضع مقبض Y
+
+block-value-set =
+    .use-min = استخدام الحد الأدنى لـ { $label }
+    .use-max = استخدام الحد الأقصى لـ { $label }
+    .use-increment = استخدام زيادة { $label }
+    .use-list = استخدام قائمة القيم المسموحة لـ { $label }
+    .min = الحد الأدنى لـ { $label }
+    .max = الحد الأقصى لـ { $label }
+    .increment = زيادة { $label }
+    .values = القيم المسموحة لـ { $label }
+    .title = مجموعة القيم
+    .x-distance = المسافة X
+    .y-distance = المسافة Y
+
+table-style-cells =
+    .tbl-start-from-style = البدء من نمط جدول
+    .tbl-extra-columns = أعمدة إضافية
+    .tbl-extra-rows = صفوف إضافية
+    .tbl-keep-from-template = الاحتفاظ من الجدول الابتدائي:
+    .tbl-keep-label-text = نص خلايا التسمية
+    .tbl-keep-data-text = نص خلايا البيانات
+    .tbl-keep-overrides = تجاوزات نمط الخلية
+    .tbl-keep-links = ارتباطات البيانات
+    .tbl-keep-fields = الحقول
+    .tbl-keep-formulas = الصيغ
+    .tbl-extra-whole = يجب أن تكون الصفوف والأعمدة الإضافية أعدادًا صحيحة.
+    .from-style-insertion = __ocs_arg_n__  حدد نقطة الإدراج أو [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  أدخل اسم نمط جدول أو [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  أدخل عدد الصفوف الإضافية <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  أدخل عدد الأعمدة الإضافية <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  أدخل خيار إدراج [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  هل تريد تضمين __ocs_arg_what__ في الجدول المُدرج؟ [Yes/No] <__ocs_arg_current__>:
+    .label-text = نص التسمية
+    .data-text = نص البيانات
+    .formulas = الصيغ
+    .fields = الحقول
+    .data-links = ارتباطات البيانات
+    .blocks = الكتل
+    .cell-style-overrides = تجاوزات نمط الخلية
+    .style-name-header = اسم نمط الجدول
+    .no-starting-table = لا يحتوي نمط الجدول على جدول.
+    .select-table = حدد جدولاً:
+    .not-a-table = الكائن ليس جدولاً.
+    .cell-style-exists = يوجد بالفعل نمط خلية بهذا الاسم.
+    .cell-style-in-use = نمط الخلية قيد الاستخدام ولا يمكن حذفه.
+    .template-size = __ocs_arg_rows__ صفوف × __ocs_arg_columns__ أعمدة
+    .cell-properties = خصائص الخلية
+    .cell-text = نص الخلية
+    .cell-borders = حدود الخلية
+    .cell-styles = أنماط الخلايا
+    .label = تسمية
+    .margins = الهوامش
+    .merge-on-create = دمج الخلايا عند إنشاء صف/عمود
+    .new-from-this = جديد من هذا
+    .new-name = اسم جديد
+    .real-number = عدد حقيقي
+    .whole-number = عدد صحيح
+    .select-table-button = تحديد جدول…
+    .starting-table = الجدول الابتدائي
+    .table-direction = اتجاه الجدول
+
+table-cells =
+    .borders-title = حدود الخلية
+    .contents-title = محتويات الخلية
+    .line = الخط
+    .lineweight = سمك الخط
+    .linetype = نوع الخط
+    .color = اللون
+    .double = خط مزدوج
+    .spacing = التباعد
+    .apply-to = تطبيق على
+    .all = الكل
+    .outside = الخارجية
+    .inside = الداخلية
+    .none = بلا
+    .top = أعلى
+    .bottom = أسفل
+    .left = يسار
+    .right = يمين
+    .inside-horizontal = الداخلية الأفقية
+    .inside-vertical = الداخلية الرأسية
+    .contents = المحتويات
+    .empty = الخلية فارغة.
+    .move-up = نقل لأعلى
+    .move-down = نقل لأسفل
+    .delete = حذف
+    .layout = التخطيط
+    .flow = تدفق
+    .stack-horizontal = مكدسة أفقيًا
+    .stack-vertical = مكدسة رأسيًا
+    .content-spacing = التباعد
+    .block-item = كتلة: { $name }
+    .text-item = نص: { $text }
+    .text-content = نص خلية الجدول
+    .borders-help = يضبط سمك الخط ونوع الخط ولون حدود الخلايا المحددة؛ اختر الحواف التي تُطبق عليها.
+    .contents-help = يرتب محتويات الخلية المحددة ويزيلها وينظم تخطيطها.
+    .block-title = كتلة الخلية
+    .format-title = تنسيق بيانات الخلية
+    .block = كتلة
+    .block-name = الاسم
+    .browse = استعراض...
+    .block-path = المسار
+    .placement = الموضع
+    .alignment = محاذاة الخلية
+    .scale = المقياس
+    .autofit = ملاءمة تلقائية
+    .rotation = زاوية الدوران
+    .format = التنسيق
+    .current-precision = الدقة الحالية
+    .precision = الدقة
+    .symbol = الرمز
+    .append-symbol = إلحاق الرمز
+    .negative-parens = القيم السالبة بين أقواس
+    .list-separator = فاصل القائمة
+    .date-format = تنسيق التاريخ
+    .no-format-settings = لا توجد إعدادات تنسيق لنوع البيانات هذا.
+    .data-type = نوع البيانات
+    .format-settings = التنسيق
+    .currency = العملة
+    .decimal-number = عدد عشري
+    .percentage = نسبة مئوية
+    .whole-number = عدد صحيح
+    .grads = غراد
+    .sample-text = نص نموذجي
+    .block-help = يضع كتلة في الخلايا المحددة: موضعها ومقياسها (أو ملاءمتها للخلية) ودورانها.
+    .format-help = يضبط نوع البيانات والتنسيق اللذين تُقرأ بهما قيم الخلايا المحددة.
+    .additional-format = تنسيق إضافي
+    .conversion = معامل التحويل
+    .prefix = بادئة
+    .suffix = لاحقة
+    .decimal-separator = الفاصل العشري
+    .thousands-separator = فاصل الآلاف
+    .space = مسافة
+    .separator-none = (بلا)
+    .zero-leading = الأصفار البادئة
+    .zero-trailing = الأصفار اللاحقة
+    .zero-feet = 0 قدم
+    .zero-inches = 0 بوصة
+    .warning-title = نوع البيانات غير متطابق
+    .warning-heading = تحتوي هذه الخلايا على قيم ليست من نوع البيانات المختار.
+    .warning-note = يقرأ التحويل كل قيمة بالنوع الجديد، وتُمسح القيمة التي لا يمكن قراءتها. يترك الإلغاء الخلايا دون تغيير.
+    .warning-ok = تحويل
+    .warning-cancel = إلغاء
+
+parameters-manager =
+    .action-parameters = معلمات الإجراءات
+    .filter = الاسم*
+    .search = البحث عن معلمة
+    .order = الترتيب
+    .polar = قطبي
+    .visibility = الرؤية
+    .variable = متغير
+    .footer = الكل: عُرضت { $shown } من { $total } معلمة
+
+parameters-manager-feedback =
+    .no-number = لا يحتوي هذا الصف على رقم قابل للتحرير.
+    .no-flag = لا يحتوي هذا الصف على علامة رؤية قابلة للتغيير.
+    .finite-number = حدد قيمة رقمية محدودة للمعلمة.
+    .stale-session = لم تعد جلسة محرر الكتل نشطة.
+    .positive-length = حدد طولًا موجبًا للمعلمة.
+    .no-direction = اتجاه المعلمة غير متاح.
+    .history = تحرير مدير المعلمات
+
+block-action-targets =
+    .prompt = BACTIONSET  حدد كائنات أو اكتب Parameter متبوعًا باسم نقطة، ثم اضغط Enter (Parameter "…"):
+    .create-prompt = BACTION  حدد كائنات أو اكتب Parameter متبوعًا باسم نقطة، ثم اضغط Enter (Parameter "…"):
+    .unique-point = أدخل اسم معلمة نقطة فريدًا.
+    .empty = يحتاج الإجراء إلى هدف واحد على الأقل.
+    .invalid = حدد أهدافًا مدعومة تنتمي إلى هذه الكتلة.
+    .stale = تغير الإجراء أو جلسة محرر الكتل؛ أعد تشغيل BACTIONSET.
+    .create-stale = تغير الإجراء أو جلسة محرر الكتل؛ أعد تشغيل BACTION.

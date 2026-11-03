@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = Šikmý úhel
+    .reset-to-style = Obnovit podle stylu (__ocs_fmt_0__)
+    .new-text-style = Nový styl textu
+    .new-style-from-selection = Nový styl z výběru…
+    .update-style-from-selection = Aktualizovat „__ocs_fmt_0__“ z výběru
+    .text-style-manager-dialog = Správce stylů textu…
+    .style-updated = Styl '__ocs_fmt_0__' byl aktualizován.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = Řádek nabídek
     .ribbon-tab = Karta pásu
     .no-matches = Žádné odpovídající příkazy
+    .switch-windows = Přepnout okna
+    .center-layer = Hladina os
+    .user-interface = Uživatelské rozhraní
+    .no-open-drawings = Žádné otevřené výkresy
+    .viewcube = ViewCube
+    .ucs-icon = Ikona USS
+    .file-tabs = Karty souborů
+    .layout-tabs = Karty rozvržení
+    .command-line = Příkazový řádek
+    .status-bar = Stavový řádek
+    .customize-qat = Přizpůsobit panel nástrojů Rychlý přístup
+    .more-commands = Další příkazy…
+    .more-commands-title = Přidat příkaz na panel nástrojů Rychlý přístup
+    .find-command-to-add = Zadejte příkaz k přidání
+    .show-below = Zobrazit pod pásem karet
+    .show-above = Zobrazit nad pásem karet
+    .qat-place-unavailable = Není k dispozici, když je pás karet zavřený
+    .qat-new = Nový
+    .qat-open = Otevřít
+    .qat-save = Uložit
+    .qat-save-as = Uložit jako
+    .qat-plot = Vykreslit
+    .qat-undo = Zpět
+    .qat-redo = Znovu
+    .qat-measure = Měřit
+    .qat-batch-plot = Dávkové vykreslování
+    .qat-match-properties = Shoda vlastností
+    .qat-plot-preview = Náhled vykreslení
+    .qat-properties = Vlastnosti
+    .add-to-qat = Přidat na panel nástrojů Rychlý přístup
+    .remove-from-qat = Odebrat z panelu nástrojů Rychlý přístup
+    .add-separator = Přidat oddělovač
+    .remove-separator = Odebrat oddělovač
+    .qat-show-below = Zobrazit panel nástrojů Rychlý přístup pod pásem karet
+    .qat-show-above = Zobrazit panel nástrojů Rychlý přístup nad pásem karet
+    .return-to-ribbon = Vrátit na pás karet
+    .float-title-side = Název panelu na boku, další nástroje se otevírají doprava
+    .float-title-bottom = Název panelu dole, další nástroje se otevírají dolů
+    .floating-suffix = {" "}(plovoucí)
 
 options =
     .language-section = Jazyk
@@ -3531,6 +3577,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: izolovaná vrstva(y) __ocs_fmt_0__.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: příkazem LAYISO nebyly izolovány žádné hladiny.
     .laymatch-select-objects-to-change-layer = LAYMATCH Vyberte objekty pro změnu vrstvy:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Vyberte objekty ke kopírování:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Vyberte objekt v cílové hladině:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH Vyberte zdrojový objekt, který má odpovídat vrstvě:
@@ -3552,6 +3601,7 @@ layers =
     .layer-s-frozen = Vrstva(y) zamrzlá.
     .layer-s-locked = Vrstva(y) uzamčena.
     .layer-s-turned-off = Vrstva(y) vypnuta.
+    .layoff-select-object-on-layer-undo = LAYOFF  Vyberte objekt v hladině, která se má vypnout, nebo [Undo]:
     .layer-s-unlocked = Vrstva(y) odemčena.
     .layers = Vrstvy: __ocs_fmt_0__
     .lock = Zámek
@@ -3927,6 +3977,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  Určete úhel otočení <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE Zadejte bod vložení:
+    .tcell-row-above =
+        Vložit řádek
+        nad
+    .tcell-row-below =
+        Vložit řádek
+        pod
+    .tcell-delete-rows =
+        Odstranit
+        řádky
+    .tcell-col-left =
+        Vložit sloupec
+        vlevo
+    .tcell-col-right =
+        Vložit sloupec
+        vpravo
+    .tcell-delete-cols =
+        Odstranit
+        sloupce
+    .tcell-merge =
+        Sloučit
+        buňky
+    .tcell-unmerge =
+        Zrušit
+        sloučení
+    .tcell-lock =
+        Zamknutí
+        buněk
+    .tcell-edit =
+        Upravit
+        text
+    .tcell-match =
+        Přizpůsobit
+        buňku
+    .tcell-borders =
+        Ohraničení
+        buněk
+    .tcell-format =
+        Formát
+        dat
+    .tcell-block =
+        Vložit
+        blok
+    .tcell-field =
+        Vložit
+        pole
+    .tcell-contents =
+        Spravovat obsah
+        buňky
+    .tcell-link =
+        Propojit
+        buňku
+    .tcell-download =
+        Stáhnout
+        ze zdroje
+    .tcell-row-style = Styl řádku
+    .tcell-column-style = Styl sloupce
+    .tcell-width = Šířka buňky
+    .tcell-height = Výška buňky
+    .tcell-border-color = Barva ohraničení
+    .tcell-border-lineweight = Tloušťka čáry ohraničení
+    .tcell-border-linetype = Typ čáry ohraničení
+    .tcell-locking = Zamknutí buňky
+    .tcell-data-link = Datové propojení buňky
+    .tcell-select-destination = Vyberte cílovou buňku:
+    .tcell-select-cell = Vyberte buňku tabulky:
+    .tcell-range-first = Vyberte první roh rozsahu buněk tabulky:
+    .tcell-range-second = Vyberte druhý roh rozsahu buněk tabulky:
+    .tcell-align-prompt = Zadejte zarovnání buňky [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Zadejte formát dat [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Zadejte název bloku nebo [?]:
+    .tcell-formula-prompt = Zadejte vzorec [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = Podle řádku/sloupce
+    .tcell-unlocked = Odemčeno
+    .tcell-content-locked = Obsah zamčen
+    .tcell-format-locked = Formát zamčen
+    .tcell-content-format-locked = Obsah i formát zamčen
+    .tcell-not-linked = Nepropojeno
+    .tcell-invalid-cell = Neplatná buňka.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  Zadejte bod vložení:
@@ -6525,9 +6653,57 @@ dimstyle =
     .move-text-outside-first = Nejprve přesuňte text ven
     .period = Období
     .space = Mezerník
+    .separator-none = (Žádný)
     .surveyors-units = Zeměměřické jednotky
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = V tomto výkresu
+    .stroke-fonts-shx = Čárová písma (SHX)
+    .font-folders = Složky písem
+    .truetype-fonts = Písma TrueType
+    .font-missing-drawn-with = chybí · kresleno písmem __ocs_fmt_0__
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = Použít „__ocs_fmt_0__“
+    .face-regular = Normální
+    .face-bold-italic = Tučná kurzíva
+    .font-style = Řez písma
+    .truetype-fonts-only = Pouze písma TrueType
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Aktualizuje se 1 text, který sleduje styl.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Texty sledující styl, které se aktualizují: __ocs_fmt_3__.
+    .style-update-in-blocks = V definicích bloků: __ocs_fmt_0__.
+    .style-update-keeps-one = 1 text s vlastní hodnotou si ji ponechá.
+    .style-update-keeps-many = Texty s vlastní hodnotou, které si ji ponechají: __ocs_fmt_0__.
+    .style-update-xref-undo = Texty v externích referencích se nemění. Jeden krok zpět společně se změnou stylu.
+    .rename-hint = Dvojklikem na název jej přejmenujete.
+    .modified-was = Změněno · bylo __ocs_fmt_0__
+    .height-asked-hint = 0 = výška se zadá při umístění textu.
+    .annotative-paper-hint = Zapnuto: výška výše je výška na papíře.
+    .backward-hint = Pozpátku a Vzhůru nohama mají vliv na jednořádkový text a atributy, ne na MTEXT.
+    .on-apply = Při použití
+    .sample-text = Ukázkový text
+    .where-used = Kde se používá
+    .kind-single-line-text = Jednořádkový text
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Definice atributů
+    .no-texts-use-style = Tento styl nepoužívá žádný text.
+    .inside-one-block = __ocs_fmt_0__ z nich v 1 definici bloku.
+    .inside-blocks = __ocs_fmt_0__ z nich v __ocs_fmt_1__ definicích bloků.
+    .used-by-one-text = používá 1 text
+    .used-by-texts = používá __ocs_fmt_0__ textů
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = Importovat styly
     .select-drawing-to-import-styles-from = Vyberte výkres, ze kterého se mají importovat styly
     .select-the-styles-to-import = Vyberte styly k importu
@@ -8023,3 +8199,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Počet položek
+    .row-count = Počet řádků
+    .row-and-column-count = Počet řádků a sloupců
+    .item-count = Počet položek
+    .angle-between-items = Úhel mezi položkami
+    .prompt-columns = Zadejte počet sloupců (Ctrl: celková rozteč sloupců):
+    .prompt-rows = Zadejte počet řádků (Ctrl: celková rozteč řádků):
+    .prompt-rows-columns = Zadejte počet řádků a sloupců:
+    .prompt-items = Zadejte počet položek (Ctrl: úhel vyplnění nebo celková rozteč):
+    .prompt-column-spacing = Zadejte vzdálenost mezi sloupci:
+    .prompt-row-spacing = Zadejte vzdálenost mezi řádky:
+    .prompt-item-spacing = Zadejte vzdálenost mezi položkami:
+    .prompt-item-angle = Zadejte úhel mezi položkami:
+    .prompt-radius = Zadejte poloměr:
+block-chain =
+    .label = Řetězení akcí
+    .cycle = Řetězec akcí bloku obsahuje cyklus.
+
+block-action-bars =
+    .requires-session = BACTIONBAR vyžaduje aktivní relaci editoru bloků.
+    .enable-display = Pro zobrazení panelů akcí nastavte BACTIONBARMODE na 1.
+    .parameters-changed = Seznam parametrů se změnil; spusťte BACTIONBAR znovu.
+    .display-updated = Zobrazení panelů akcí bylo aktualizováno.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Vyberte parametr, zadejte jeho název nebo [All] <Vybraný>:
+    .prompt-all = BACTIONBAR  Vyberte parametr, zadejte jeho název nebo [All] <All>:
+    .choose-mode = Zvolte Show, Hide nebo Reset.
+    .unique-parameter = Zadejte jedinečný název parametru, vyberte jeho koncový bod nebo zvolte All.
+    .enter-parameter = Zadejte název parametru nebo zvolte All.
+    .pick-endpoint = Vyberte koncový bod parametru nebo zvolte All.
+
+block-construction =
+    .requires-session = BCONSTRUCTION je k dispozici pouze v editoru bloků.
+    .choose-operation = Zvolte Convert, Revert, Show nebo Hide.
+    .stale-session = Relace editoru bloků pro pomocnou geometrii již není aktivní.
+    .changed-count = Změněné geometrické objekty: __ocs_fmt_0__.
+    .prompt-selection = BCONSTRUCTION  Vyberte geometrii nebo [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  Zvolte [Convert/Revert] <Convert> nebo stisknutím Enter použijte vybranou operaci:
+    .revert = Vrátit
+    .history = Upravit pomocnou geometrii
+    .unsupported-record = Tento záznam pomocné geometrie má nepodporovanou verzi nebo hodnotu.
+    .open-definition = Před úpravou pomocné geometrie otevřete definici bloku.
+    .missing-object = Vybraný objekt pomocné geometrie již není k dispozici.
+    .active-geometry = Vyberte geometrii v aktivní definici bloku.
+    .locked-layer = Pomocnou geometrii nelze měnit v uzamčené hladině.
+    .revert-layer = Pro vrácenou geometrii vyberte existující odemčenou hladinu.
+
+block-authoring-history =
+    .alignment-type = Typ zarovnání
+    .action-override = Upravit přepsání akce bloku
+    .action-chain = Upravit řetězec akcí bloku
+    .action-base = Upravit základní bod akce bloku
+    .parameter-chain = BEDIT Řetězení akcí parametru
+    .value-set = BEDIT Sada hodnot parametru
+    .parameter-metadata = Upravit metadata parametru bloku
+    .authoring-grip = Uzel pro tvorbu bloku
+
+block-operation-history =
+    .reset-references = Obnovit reference bloku
+    .associate-action = Přiřadit akci bloku
+    .action-selection = Výběrová sada akce
+    .test-parameter = Parametr testovacího bloku
+    .reference-parameter = Parametr reference bloku
+    .align-reference = Zarovnat referenci bloku
+    .insertion-grip-order = Změnit pořadí vkládacích uzlů
+    .move-grip = Přesunout nativní uzel bloku
+    .configure-grips = Nastavit uzly parametrů bloku
+    .lookup-tables = Vyhledávací tabulky
+    .hyperlink = Hypertextový odkaz bloku
+    .properties = Vlastnosti bloku
+    .properties-table = Tabulka vlastností bloku
+    .visibility-state = Stav viditelnosti
+    .visibility-states = Stavy viditelnosti
+
+block-formatted-history =
+    .action = Akce { $label }
+    .parameter = Parametr { $label }
+    .edit-block = Upravit blok { $label }
+    .save-block = Uložit blok jako { $label }
+    .delete-block = Odstranit blok { $label }
+
+block-history-kinds =
+    .flip = Překlopení
+    .polar-stretch = Polární protažení
+    .basepoint = Základní bod
+    .lookup = Vyhledávání
+
+block-action-properties =
+    .base-point = Základní bod akce
+    .overrides = Přepsání akce
+    .multiplier = Násobitel vzdálenosti
+    .angle-offset = Úhlový posun (stupně)
+    .chain = Řetězec akcí
+    .chain-to = Navázat na
+
+block-parameter-properties =
+    .show-properties = Zobrazit ve vlastnostech
+    .parameter-name = Název parametru
+    .grip-count = Počet uzlů
+    .dependent-base = Závislý základní bod
+    .offset-x = Posun základny X
+    .offset-y = Posun základny Y
+    .base-grip = Poloha základního uzlu
+    .end-grip = Poloha koncového uzlu
+    .x-grip = Poloha uzlu X
+    .y-grip = Poloha uzlu Y
+
+block-value-set =
+    .use-min = Použít minimum pro { $label }
+    .use-max = Použít maximum pro { $label }
+    .use-increment = Použít krok pro { $label }
+    .use-list = Použít seznam povolených hodnot pro { $label }
+    .min = Minimum pro { $label }
+    .max = Maximum pro { $label }
+    .increment = Krok pro { $label }
+    .values = Povolené hodnoty pro { $label }
+    .title = Sada hodnot
+    .x-distance = Vzdálenost X
+    .y-distance = Vzdálenost Y
+
+table-style-cells =
+    .tbl-start-from-style = Začít ze stylu tabulky
+    .tbl-extra-columns = Další sloupce
+    .tbl-extra-rows = Další řádky
+    .tbl-keep-from-template = Zachovat z výchozí tabulky:
+    .tbl-keep-label-text = Text buněk popisků
+    .tbl-keep-data-text = Text datových buněk
+    .tbl-keep-overrides = Přepsání stylu buňky
+    .tbl-keep-links = Datová propojení
+    .tbl-keep-fields = Pole
+    .tbl-keep-formulas = Vzorce
+    .tbl-extra-whole = Počet dalších řádků a sloupců musí být celé číslo.
+    .from-style-insertion = __ocs_arg_n__  Určete bod vložení nebo [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Zadejte název stylu tabulky nebo [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Zadejte počet dalších řádků <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Zadejte počet dalších sloupců <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Zadejte možnost vložení [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  Zahrnout __ocs_arg_what__ do vložené tabulky? [Yes/No] <__ocs_arg_current__>:
+    .label-text = text popisků
+    .data-text = datový text
+    .formulas = vzorce
+    .fields = pole
+    .data-links = datová propojení
+    .blocks = bloky
+    .cell-style-overrides = přepsání stylu buňky
+    .style-name-header = Název stylu tabulky
+    .no-starting-table = Styl tabulky neobsahuje tabulku.
+    .select-table = Vyberte tabulku:
+    .not-a-table = Objekt není tabulka.
+    .cell-style-exists = Styl buňky s tímto názvem již existuje.
+    .cell-style-in-use = Styl buňky se používá a nelze jej odstranit.
+    .template-size = __ocs_arg_rows__ řádků × __ocs_arg_columns__ sloupců
+    .cell-properties = Vlastnosti buňky
+    .cell-text = Text buňky
+    .cell-borders = Ohraničení buněk
+    .cell-styles = Styly buněk
+    .label = Popisek
+    .margins = Okraje
+    .merge-on-create = Sloučit buňky při vytváření řádků/sloupců
+    .new-from-this = Nový z tohoto
+    .new-name = Nový název
+    .real-number = Reálné číslo
+    .whole-number = Celé číslo
+    .select-table-button = Vybrat tabulku…
+    .starting-table = Výchozí tabulka
+    .table-direction = Směr tabulky
+
+table-cells =
+    .borders-title = Ohraničení buněk
+    .contents-title = Obsah buňky
+    .line = Čára
+    .lineweight = Tloušťka čáry
+    .linetype = Typ čáry
+    .color = Barva
+    .double = Dvojitá čára
+    .spacing = Rozestup
+    .apply-to = Použít na
+    .all = Vše
+    .outside = Vnější
+    .inside = Vnitřní
+    .none = Žádné
+    .top = Horní
+    .bottom = Dolní
+    .left = Levé
+    .right = Pravé
+    .inside-horizontal = Vnitřní vodorovné
+    .inside-vertical = Vnitřní svislé
+    .contents = Obsah
+    .empty = Buňka je prázdná.
+    .move-up = Posunout nahoru
+    .move-down = Posunout dolů
+    .delete = Odstranit
+    .layout = Rozvržení
+    .flow = Tok
+    .stack-horizontal = Skládané vodorovně
+    .stack-vertical = Skládané svisle
+    .content-spacing = Rozestup
+    .block-item = Blok: { $name }
+    .text-item = Text: { $text }
+    .text-content = Text buňky tabulky
+    .borders-help = Nastaví tloušťku čáry, typ čáry a barvu ohraničení vybraných buněk; zvolte hrany, na které se použijí.
+    .contents-help = Seřadí, odstraní a rozvrhne obsah vybrané buňky.
+    .block-title = Blok buňky
+    .format-title = Formát dat buňky
+    .block = Blok
+    .block-name = Název
+    .browse = Procházet...
+    .block-path = Cesta
+    .placement = Umístění
+    .alignment = Zarovnání buňky
+    .scale = Měřítko
+    .autofit = Přizpůsobit automaticky
+    .rotation = Úhel natočení
+    .format = Formát
+    .current-precision = Aktuální přesnost
+    .precision = Přesnost
+    .symbol = Symbol
+    .append-symbol = Připojit symbol
+    .negative-parens = Záporná čísla v závorkách
+    .list-separator = Oddělovač seznamu
+    .date-format = Formát data
+    .no-format-settings = Tento datový typ nemá nastavení formátu.
+    .data-type = Datový typ
+    .format-settings = Formát
+    .currency = Měna
+    .decimal-number = Desetinné číslo
+    .percentage = Procenta
+    .whole-number = Celé číslo
+    .grads = Grady
+    .sample-text = ukázkový text
+    .block-help = Vloží blok do vybraných buněk: jeho umístění, měřítko (nebo přizpůsobení buňce) a natočení.
+    .format-help = Nastaví datový typ a formát, se kterým se čtou hodnoty vybraných buněk.
+    .additional-format = Další formát
+    .conversion = Převodní faktor
+    .prefix = Předpona
+    .suffix = Přípona
+    .decimal-separator = Desetinný oddělovač
+    .thousands-separator = Oddělovač tisíců
+    .space = Mezera
+    .separator-none = (Žádný)
+    .zero-leading = Úvodní nuly
+    .zero-trailing = Koncové nuly
+    .zero-feet = 0 stop
+    .zero-inches = 0 palců
+    .warning-title = Datový typ neodpovídá
+    .warning-heading = Tyto buňky obsahují hodnoty, které nejsou zvoleného datového typu.
+    .warning-note = Převod přečte každou hodnotu jako nový typ; hodnota, kterou nelze přečíst, se vymaže. Zrušit ponechá buňky beze změny.
+    .warning-ok = Převést
+    .warning-cancel = Zrušit
+
+parameters-manager =
+    .action-parameters = Parametry akcí
+    .filter = Název*
+    .search = Hledat parametr
+    .order = Pořadí
+    .polar = Polární
+    .visibility = Viditelnost
+    .variable = Proměnná
+    .footer = Vše: zobrazeno { $shown } z { $total } parametrů
+
+parameters-manager-feedback =
+    .no-number = Tento řádek nemá číslo k úpravě.
+    .no-flag = Tento řádek nemá příznak viditelnosti ke změně.
+    .finite-number = Zadejte konečnou číselnou hodnotu parametru.
+    .stale-session = Relace editoru bloků již není aktivní.
+    .positive-length = Zadejte kladnou délku parametru.
+    .no-direction = Směr parametru není dostupný.
+    .history = Úprava ve správci parametrů
+
+block-action-targets =
+    .prompt = BACTIONSET  Vyberte objekty nebo zadejte Parameter a název bodu, poté stiskněte Enter (Parameter "…"):
+    .create-prompt = BACTION  Vyberte objekty nebo zadejte Parameter a název bodu, poté stiskněte Enter (Parameter "…"):
+    .unique-point = Zadejte jedinečný název bodového parametru.
+    .empty = Akce potřebuje alespoň jeden cíl.
+    .invalid = Vyberte podporované cíle patřící do tohoto bloku.
+    .stale = Akce nebo relace editoru bloků se změnila; spusťte BACTIONSET znovu.
+    .create-stale = Akce nebo relace editoru bloků se změnila; spusťte BACTION znovu.

@@ -548,25 +548,10 @@ fn plot_scene_content(
     render_mode_override: Option<codec::entities::ViewportRenderMode>,
 ) -> PlotContent {
     let (mut paper_wires, mut model_wires) = scene.plot_wire_groups(render_mode_override);
-    let plot_viewport_borders = scene
-        .effective_plot_settings()
-        .is_none_or(|settings| settings.flags.plot_viewport_borders);
-    paper_wires.retain(|wire| {
-        wire.plot_visible
-            && (plot_viewport_borders
-                || !crate::scene::Scene::handle_from_wire_name(&wire.name)
-                    .and_then(|handle| scene.document.get_entity(handle))
-                    .is_some_and(|entity| {
-                        matches!(
-                            entity,
-                            codec::EntityType::Viewport(viewport)
-                                if !crate::scene::Scene::is_sheet_viewport(
-                                    &scene.document,
-                                    viewport,
-                                )
-                        )
-                    }))
-    });
+    // A viewport border plots whenever its layer plots, as in the reference
+    // application: the page setup's plot-viewport-borders flag (off in its
+    // layouts) does not hide it.
+    paper_wires.retain(|wire| wire.plot_visible);
     model_wires.retain(|wire| wire.plot_visible);
     // A text / leader background mask is filled with the canvas colour so it
     // hides what is behind it; on paper that colour is the sheet's, not the
@@ -3707,7 +3692,8 @@ impl OpenCADStudio {
         match capture_window {
             // The screenshot may never come back (a window the compositor
             // does not draw), so it races a short timeout: whichever answers
-            // first runs the save, with or without the picture.
+            // first runs the save, with or without the picture. A minimized
+            // window is not read back at all: the save keeps the old preview.
             Some(window) => {
                 fn finish<F>(
                     slot: &std::sync::Mutex<Option<F>>,
@@ -3732,8 +3718,7 @@ impl OpenCADStudio {
                     let _ = tx.send(());
                 });
                 Task::batch([
-                    iced::window::screenshot(window)
-                        .map(Some)
+                    crate::app::screenshot_if_drawn(window)
                         .then(move |screenshot| finish(&shot_slot, screenshot)),
                     Task::perform(rx, |_| ()).then(move |_| finish(&timeout_slot, None)),
                 ])
@@ -4078,6 +4063,11 @@ impl OpenCADStudio {
         };
         self.close_active_modal();
         self.pending_close = None;
+        // The drawing on this slot is replaced whole and its identity goes
+        // with it, so the positions it remembered go too: the drawing read
+        // back from disk is not the one that placed them.
+        crate::modules::draw::draw::attdef::session().forget_place_of(conflict.tab_id);
+        crate::modules::annotate::text::forget_place_of(conflict.tab_id);
         self.tab_counter += 1;
         self.tabs[i] = crate::app::document::DocumentTab::new_drawing(self.tab_counter);
         self.active_tab = i;
@@ -8350,6 +8340,136 @@ mod plot_paper_tests {
         assert_eq!(ps.paper_image_origin_x, 3.5);
     }
 
+    /// `Layout1` with a content viewport on layer `VPB`, plotted with the page
+    /// setup's plot-viewport-borders flag off (the reference default).
+    fn border_plotted(vpb_plots: bool) -> bool {
+        let mut app = app_with_printer_named_sheet();
+        edit_layout_settings(&mut app, |ps| ps.flags.plot_viewport_borders = false);
+        assert!(!layout_settings(&app).flags.plot_viewport_borders);
+        let i = app.active_tab;
+        let scene = &mut app.tabs[i].scene;
+        let mut layer = codec::tables::Layer::new("VPB");
+        layer.is_plottable = vpb_plots;
+        scene.document.layers.add(layer).unwrap();
+        let mut viewport = codec::entities::Viewport::new();
+        viewport.center = codec::types::Vector3::new(150.0, 105.0, 0.0);
+        viewport.width = 100.0;
+        viewport.height = 80.0;
+        viewport.id = 2;
+        viewport.status = codec::entities::ViewportStatusFlags::default_on();
+        viewport.common.layer = "VPB".into();
+        let handle = scene
+            .document
+            .add_entity_to_layout(codec::EntityType::Viewport(Box::new(viewport)), "Layout1")
+            .unwrap();
+        scene.notify_viewport_changed(handle);
+        scene.bump_entities(&[(handle, crate::scene::ChangeKind::Added)]);
+        let content = super::plot_scene_content(scene, false, None);
+        let name = handle.value().to_string();
+        content
+            .wires
+            .iter()
+            .any(|wire| wire.name == name && wire.points.iter().any(|p| p[0].is_finite()))
+    }
+
+    #[test]
+    fn viewport_border_plots_with_the_page_setup_flag_off() {
+        assert!(
+            border_plotted(true),
+            "border of a plotting layer was dropped"
+        );
+    }
+
+    #[test]
+    fn viewport_border_on_a_no_plot_layer_stays_off_the_plot() {
+        assert!(
+            !border_plotted(false),
+            "border of a no-plot layer was plotted"
+        );
+    }
+
+    /// Give `Layout1` these stored margins and rotation, then a LIMMIN that does
+    /// not match them (as after a device change).
+    fn layout_with_margins_and_stale_limmin(
+        margins: (f64, f64, f64, f64),
+        rotation: codec::objects::PlotRotation,
+    ) -> OpenCADStudio {
+        let mut app = app_with_printer_named_sheet();
+        edit_layout_settings(&mut app, |ps| {
+            ps.paper_size = "ISO_A4_(210.00_x_297.00_MM)".into();
+            ps.paper_width = 210.0;
+            ps.paper_height = 297.0;
+            ps.rotation = rotation;
+            ps.margins =
+                codec::objects::PaperMargin::new(margins.0, margins.1, margins.2, margins.3);
+        });
+        let i = app.active_tab;
+        for object in app.tabs[i].scene.document.objects.values_mut() {
+            if let codec::objects::ObjectType::Layout(layout) = object {
+                if layout.name == "Layout1" {
+                    layout.min_limits = (-20.0, -7.5);
+                }
+            }
+        }
+        app.tabs[i].scene.geometry_epoch += 1;
+        app
+    }
+
+    /// Full-bleed sheet (no margins) with a LIMMIN left over from a device
+    /// that had them: paper (0,0) is the sheet corner, so a point at paper
+    /// (50,40) plots at 50,40 mm, as in the reference application.
+    #[test]
+    fn layout_plot_origin_ignores_a_stale_limmin() {
+        use codec::objects::PlotRotation;
+        let mut app =
+            layout_with_margins_and_stale_limmin((0.0, 0.0, 0.0, 0.0), PlotRotation::Degrees90);
+        let ((x0, y0), (x1, y1)) = app.tabs[app.active_tab].scene.paper_limits().unwrap();
+        assert!(x0.abs() < 1e-9 && y0.abs() < 1e-9, "sheet origin {x0} {y0}");
+        assert!(
+            (x1 - 297.0).abs() < 1e-9 && (y1 - 210.0).abs() < 1e-9,
+            "{x1} {y1}"
+        );
+        let _ = app.on_plot_dialog_open();
+        let page = app.layout_plot_page_for("Layout");
+        let scale = page.scale as f64;
+        let at = (
+            (50.0 + page.offset_x) * scale,
+            (40.0 + page.offset_y) * scale,
+        );
+        assert!(
+            (at.0 - 50.0).abs() < 1e-6 && (at.1 - 40.0).abs() < 1e-6,
+            "paper (50,40) plots at {at:?}"
+        );
+    }
+
+    /// With margins the sheet starts at minus the margins as they land on the
+    /// turned medium, at every rotation; LIMMIN plays no part.
+    #[test]
+    fn layout_sheet_origin_follows_the_rotated_margins() {
+        use codec::objects::PlotRotation;
+        let margins = (5.0, 10.0, 15.0, 20.0); // left, bottom, right, top of the medium
+        for (rotation, expected) in [
+            (PlotRotation::None, (-5.0, -10.0)),
+            (PlotRotation::Degrees90, (-20.0, -5.0)),
+            (PlotRotation::Degrees180, (-15.0, -20.0)),
+            (PlotRotation::Degrees270, (-10.0, -15.0)),
+        ] {
+            let app = layout_with_margins_and_stale_limmin(margins, rotation);
+            let scene = &app.tabs[app.active_tab].scene;
+            let ((x0, y0), _) = scene.paper_limits().unwrap();
+            assert!(
+                (x0 - expected.0).abs() < 1e-9 && (y0 - expected.1).abs() < 1e-9,
+                "{rotation:?}: sheet origin {x0} {y0}, expected {expected:?}"
+            );
+            // The printable area starts at paper (0,0).
+            let ((px, py), _) = scene.printable_area_limits().unwrap();
+            assert!(
+                px.abs() < 1e-9 && py.abs() < 1e-9,
+                "{rotation:?}: printable {px} {py}"
+            );
+        }
+    }
+
     /// Open the metric page-setup fixture written by the commercial
     /// application (see `tests/fixtures/plot/README.md`).
     #[cfg(not(target_arch = "wasm32"))]
@@ -9769,5 +9889,184 @@ mod mtext_save_loss_tests {
             );
             assert!(app.pending_conversion_save.is_none(), "{name}");
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod external_change_reload_tests {
+    use crate::app::{
+        Message, OpenCADStudio, PendingExternalChange, SaveContinuation, SavePurpose,
+    };
+
+    /// The file the reload is told to read back, gone whatever the test does
+    /// next — including a failing assert.
+    struct TempFile(std::path::PathBuf);
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Reloading a drawing that changed outside the app replaces the whole
+    /// tab, and the drawing read back from disk is a different drawing: the
+    /// place the replaced one remembered for its next attribute, and the line
+    /// TEXT would continue below, belong to the document that is gone.
+    #[test]
+    fn reloading_forgets_the_places_the_replaced_drawing_remembered() {
+        let mut app = OpenCADStudio::new_for_test();
+        let reloaded_id = app.push_test_document();
+        let kept_id = app.push_test_document();
+        let i = app
+            .tabs
+            .iter()
+            .position(|tab| tab.id == reloaded_id)
+            .expect("the drawing the reload replaces");
+        crate::modules::draw::draw::attdef::session().set_place(reloaded_id, &Default::default());
+        crate::modules::annotate::text::session().set_place(reloaded_id, &Default::default());
+        crate::modules::draw::draw::attdef::session().set_place(kept_id, &Default::default());
+        assert!(
+            crate::modules::draw::draw::attdef::session()
+                .last_in(reloaded_id)
+                .is_some(),
+            "the drawing about to be reloaded remembered a place"
+        );
+        assert!(
+            crate::modules::annotate::text::session()
+                .last_in(reloaded_id)
+                .is_some(),
+            "and a line to continue below"
+        );
+        assert!(
+            crate::modules::draw::draw::attdef::session()
+                .last_in(kept_id)
+                .is_some(),
+            "the drawing that stays open remembered its own"
+        );
+        let temp = TempFile(
+            std::env::temp_dir().join(format!("open_cad_studio_reload_{reloaded_id}.dxf")),
+        );
+        std::fs::write(&temp.0, b"").expect("the file the reload reads back");
+        app.pending_external_change = Some(PendingExternalChange {
+            tab_id: reloaded_id,
+            path: temp.0.clone(),
+            version: codec::DxfVersion::AC1027,
+            purpose: SavePurpose::Manual,
+            continuation: SaveContinuation::None,
+            set_current_path: true,
+        });
+
+        let _ = app.update(Message::ExternalChangeReload);
+
+        assert_ne!(
+            app.tabs[i].id, reloaded_id,
+            "the reloaded drawing is a fresh tab, not the one that was on disk"
+        );
+        assert!(
+            crate::modules::draw::draw::attdef::session()
+                .last_in(reloaded_id)
+                .is_none(),
+            "the place the replaced drawing remembered went with it"
+        );
+        assert!(
+            crate::modules::annotate::text::session()
+                .last_in(reloaded_id)
+                .is_none(),
+            "and so did the line it remembered"
+        );
+        assert!(
+            app.tabs.iter().any(|tab| tab.id == kept_id),
+            "the other drawing is still open"
+        );
+        assert!(
+            crate::modules::draw::draw::attdef::session()
+                .last_in(kept_id)
+                .is_some(),
+            "and keeps the place it remembered"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod minimized_save_tests {
+    use crate::app::{Message, OpenCADStudio, SaveContinuation, SavePurpose};
+    use iced::futures::StreamExt;
+    use iced_runtime::window::Action as WindowAction;
+    use iced_runtime::Action;
+
+    /// A save driven with the window minimized (the MCP bridge saving while
+    /// the window sits in the taskbar) skipped the thumbnail check and read
+    /// a 0x0 window back: iced's renderer panics on that with "buffer slices
+    /// can not be empty" and took the program down. The save now asks the
+    /// window's size first and writes the file without a new preview.
+    #[test]
+    fn a_minimized_window_saves_without_reading_the_screen_back() {
+        let dir = std::env::temp_dir().join(format!(
+            "ocs-minimized-save-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch dir");
+        let path = dir.join("minimized.dxf");
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs
+            .push(crate::app::document::DocumentTab::new_drawing(1));
+        app.active_tab = app.tabs.len() - 1;
+        app.main_window = Some(iced::window::Id::unique());
+        // A drawn viewport from before the window was minimized.
+        crate::ui::wrap_bar::set_drawn_bounds(
+            crate::app::view::VIEWPORT_CAPTURE_BOUNDS_ID,
+            iced::Rectangle::new(iced::Point::ORIGIN, iced::Size::new(800.0, 600.0)),
+        );
+        app.thumbnail_capture_clean = true;
+        let task = app.queue_native_save(
+            app.active_tab,
+            path.clone(),
+            codec::DxfVersion::AC1027,
+            SavePurpose::Manual,
+            SaveContinuation::None,
+            true,
+            false,
+        );
+
+        let mut asked_size = false;
+        let mut outputs = Vec::new();
+        let mut stream = iced_runtime::task::into_stream(task).expect("the save runs a task");
+        while let Some(action) = iced::futures::executor::block_on(stream.next()) {
+            match action {
+                Action::Window(WindowAction::GetSize(_, reply)) => {
+                    asked_size = true;
+                    let _ = reply.send(iced::Size::ZERO);
+                }
+                Action::Window(WindowAction::Screenshot(..)) => {
+                    panic!("a minimized window was read back for the thumbnail")
+                }
+                Action::Output(message) => outputs.push(message),
+                _ => {}
+            }
+        }
+
+        assert!(
+            asked_size,
+            "the save asks the window's size before capturing"
+        );
+        assert!(outputs
+            .iter()
+            .any(|message| matches!(message, Message::ThumbnailCaptureFinished)));
+        let saved = outputs.into_iter().find_map(|message| match message {
+            Message::SaveFinished(outcome) => Some(outcome),
+            _ => None,
+        });
+        let saved = saved.expect("the save still runs");
+        assert!(
+            saved.result.is_ok(),
+            "save failed: {:?}",
+            saved.result.err()
+        );
+        assert!(saved.refreshed_preview.is_none());
+        assert!(path.is_file());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

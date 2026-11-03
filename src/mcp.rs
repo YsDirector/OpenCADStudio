@@ -39,8 +39,14 @@ const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 /// `input` gained `handles`, so a selection prompt can be handed a set
 /// without a round trip through `select`; the dialog actions gained
 /// `dialog_discard` and `dialog_cancel`.
+/// The attribute form an attributed insertion raises is answerable from a
+/// script, so the action list gained `dialog_answer`.
+/// Table cells are driven from a script: `table_cell_dialog`,
+/// `table_cell_warning`, `table_cell_tab` and `command_submit`.
+/// `set_properties` lists its `name` selector and takes a colour as a
+/// number or `{"rgb":[r,g,b]}`, which its example shows on a layer.
 #[cfg(test)]
-const TOOL_SCHEMA_DIGEST: &str = "4eb2f1987d1373501b5c3e0545bd818e7f6c05df500caa44c52627b3abf68be2";
+const TOOL_SCHEMA_DIGEST: &str = "c2d7d09ac418a0a56e8de84623b62d880e5f90b424ed9fe08618cdd18ab7eb54";
 const MAX_REQUEST: usize = 1_048_576;
 const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
 const CACHE_TTL_MS: u64 = 3_600_000;

@@ -753,6 +753,18 @@ impl OpenCADStudio {
                 }
             }
 
+            // The annotation scale is the drawing's own scale object, named
+            // in the drawing's units.
+            if let Some(name) = self.tabs[i].scene.viewport_annotation_scale_name(handle) {
+                if let Some(prop) = sections
+                    .iter_mut()
+                    .flat_map(|section| section.props.iter_mut())
+                    .find(|p| p.field == "vp_anno_scale")
+                {
+                    prop.value = crate::scene::model::object::PropValue::ReadOnly(name);
+                }
+            }
+
             // Drive the viewport scale picker from the drawing's
             // own scale list instead of a built-in set.
             let file_scales = self.tabs[i].scene.scale_list();
@@ -1343,13 +1355,12 @@ impl OpenCADStudio {
                 // A spacing the table never stored shows its default: five
                 // and a half data-text heights (0.18 high text without data rows).
                 if table.break_spacing <= 0.0 {
-                    let data_height = selected_style
-                        .filter(|_| table.rows.len() > 2)
-                        .map_or(0.18, |style| style.data_row_style.text_height);
                     update_row_text(
                         &mut sections,
                         "tbl_break_spacing",
-                        crate::entities::common::format_length(5.5 * data_height),
+                        crate::entities::common::format_length(
+                            crate::entities::table::resolved_break_spacing(table, doc),
+                        ),
                     );
                 }
                 update_row_toggle(&mut sections, "tbl_title_suppressed", title_suppressed);
@@ -1381,11 +1392,13 @@ impl OpenCADStudio {
                         table.cell(row_index, column_index),
                     ) {
                         let document_row_style = selected_style.map(|style| {
-                            let kind = match (title_suppressed, header_suppressed, row_index) {
-                                (false, _, 0) => 0,
-                                (false, false, 1) | (true, false, 0) => 1,
-                                _ => 2,
-                            };
+                            let kind = crate::entities::table::cell_role_kind(
+                                table,
+                                title_suppressed,
+                                header_suppressed,
+                                row_index,
+                                column_index,
+                            );
                             match kind {
                                 0 => &style.title_row_style,
                                 1 => &style.header_row_style,
@@ -1572,6 +1585,142 @@ impl OpenCADStudio {
                             ("tbl_cell_border_left", CellEdgeFlags::LEFT),
                         ] {
                             update_row_toggle(&mut sections, field, border_visible(edge));
+                        }
+                        // The picked-cell rows the table alone cannot resolve.
+                        if crate::entities::table::prop_cell_range().is_some() {
+                            // A field shows the text it evaluates to.
+                            if let Some(field) =
+                                cell.contents.first().and_then(|content| content.field_handle)
+                            {
+                                if let Some(text) = crate::entities::field::cell_text(
+                                    doc,
+                                    field,
+                                    table.common.handle,
+                                ) {
+                                    update_row_text(&mut sections, "tbl_cell_text", text);
+                                }
+                            }
+                            let role = crate::entities::table::row_role_kind(
+                                table,
+                                title_suppressed,
+                                header_suppressed,
+                                row_index,
+                            );
+                            update_row_text(
+                                &mut sections,
+                                "tbl_cell_row_style",
+                                ["Title", "Header", "Data"][role.min(2) as usize].to_string(),
+                            );
+                            if background_style.is_none() {
+                                let name = document_row_style
+                                    .filter(|style| style.fill_enabled)
+                                    .map(|style| {
+                                        crate::entities::table::cell_color_name(style.fill_color)
+                                    })
+                                    .unwrap_or_else(|| "None".to_string());
+                                set_choice_with(&mut sections, "tbl_cell_bg", name);
+                            }
+                            let local_border = [
+                                cell.style.as_ref(),
+                                row.style.as_ref(),
+                                table
+                                    .columns
+                                    .get(column_index)
+                                    .and_then(|column| column.style.as_ref()),
+                                table.base_style.as_ref(),
+                            ]
+                            .into_iter()
+                            .flatten()
+                            .find(|style| style.applied_border_edges.contains(CellEdgeFlags::TOP))
+                            .map(|style| &style.top_border);
+                            let (border_color, border_lw) = match local_border {
+                                Some(border) => (border.color, border.line_weight),
+                                None => document_row_style.map_or(
+                                    (codec::types::Color::ByBlock, codec::types::LineWeight::ByBlock),
+                                    |style| (style.top_border.color, style.top_border.line_weight),
+                                ),
+                            };
+                            set_choice_with(
+                                &mut sections,
+                                "tbl_cell_border_color",
+                                crate::entities::table::cell_color_name(border_color),
+                            );
+                            for section in sections.iter_mut() {
+                                if let Some(property) = section
+                                    .props
+                                    .iter_mut()
+                                    .find(|property| property.field == "tbl_cell_border_lw")
+                                {
+                                    if let crate::scene::model::object::PropValue::FieldLwChoice {
+                                        value,
+                                        ..
+                                    } = &mut property.value
+                                    {
+                                        *value = border_lw;
+                                    }
+                                }
+                            }
+                            let linetype = local_border
+                                .and_then(|border| border.line_type_handle)
+                                .and_then(|handle| {
+                                    doc.line_types.iter().find(|lt| lt.handle == handle)
+                                })
+                                .map(|lt| lt.name.clone())
+                                .unwrap_or_else(|| "ByBlock".to_string());
+                            let mut linetypes = vec!["ByBlock".to_string(), "ByLayer".to_string()];
+                            linetypes.extend(
+                                doc.line_types
+                                    .iter()
+                                    .map(|lt| lt.name.clone())
+                                    .filter(|name| {
+                                        !name.eq_ignore_ascii_case("ByBlock")
+                                            && !name.eq_ignore_ascii_case("ByLayer")
+                                    }),
+                            );
+                            set_row_value(
+                                &mut sections,
+                                "tbl_cell_border_lt",
+                                crate::scene::model::object::PropValue::Choice {
+                                    selected: linetype,
+                                    options: linetypes,
+                                },
+                            );
+                            let margin = |property, fallback: f64, left: bool| {
+                                local(property)
+                                    .map(|style| if left { style.margin_left } else { style.margin_top })
+                                    .unwrap_or(fallback)
+                            };
+                            update_row_text(
+                                &mut sections,
+                                "tbl_cell_hmargin",
+                                crate::entities::common::format_length(margin(
+                                    CellStylePropertyFlags::MARGIN_LEFT,
+                                    horizontal_margin,
+                                    true,
+                                )),
+                            );
+                            update_row_text(
+                                &mut sections,
+                                "tbl_cell_vmargin",
+                                crate::entities::common::format_length(margin(
+                                    CellStylePropertyFlags::MARGIN_TOP,
+                                    vertical_margin,
+                                    false,
+                                )),
+                            );
+                            if local(CellStylePropertyFlags::DATA_TYPE).is_none() {
+                                if let Some(style) = document_row_style {
+                                    update_row_text(
+                                        &mut sections,
+                                        "tbl_cell_data_category",
+                                        crate::entities::table::cell_data_category(
+                                            style.data_type,
+                                            style.unit_type,
+                                        )
+                                        .to_string(),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -2068,11 +2217,28 @@ impl OpenCADStudio {
             prop_vertex
         };
         let same_selection = cur_handles == prev_handles;
-        let prop_vertex_indicator_active = if same_selection {
+        let mut prop_vertex_indicator_active = if same_selection {
             self.tabs[i].properties.prop_vertex_indicator_active
         } else {
             false
         };
+        // Picked table cells: the panel shows the first picked cell.
+        let mut prop_vertex = prop_vertex;
+        let mut picked_range = None;
+        if let (Some(cells), [handle]) =
+            (self.tabs[i].scene.table_cells, cur_handles.as_slice())
+        {
+            if let (true, Some(codec::EntityType::Table(table))) = (
+                cells.table == *handle,
+                self.tabs[i].scene.document.get_entity(*handle),
+            ) {
+                let (row, column, _, _) = cells.range();
+                prop_vertex = row * table.column_count() + column;
+                prop_vertex_indicator_active = true;
+                picked_range = Some(cells.range());
+            }
+        }
+        crate::entities::table::set_prop_cell_range(picked_range);
         crate::scene::view::dispatch::set_prop_current_vertex(prop_vertex);
         crate::entities::table::set_prop_current_cell(prop_vertex);
         crate::entities::table::set_prop_current_cell_active(prop_vertex_indicator_active);
@@ -2752,21 +2918,35 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                             ],
                         });
                     }
-                    if let Some((chain_actions, value_sets)) =
+                    if let Some(definition) = self.tabs[i].active_block_edit_session().map(|session| session.br_handle) {
+                        if let Some(current) = crate::scene::block_actions::chain::label(
+                            &self.tabs[i].scene.document, definition, item.handle) {
+                            panel.sections.push(PropSection {
+                                title: crate::t!("Action chain").into_owned(),
+                                props: vec![Property {
+                                    label: crate::t!("Chain to").into_owned(),
+                                    field: "authoring_action_chain",
+                                    value: PropValue::EditText(current),
+                                }],
+                            });
+                        }
+                    }
+                    if let Some((chaining, value_sets)) =
                         self.authoring_parameter_properties(item.handle)
                     {
-                        panel.sections.push(PropSection {
-                            title: crate::t!("Behavior").into_owned(),
-                            props: vec![Property {
-                                label: crate::t!("Chain actions").into_owned(),
-                                field: "authoring_chain_actions_state",
-                                value: PropValue::ReadOnly(if chain_actions {
-                                    crate::t!("Enabled (unsupported)").into_owned()
-                                } else {
-                                    crate::t!("Disabled").into_owned()
-                                }),
-                            }],
-                        });
+                        if let Some(chain_actions) = chaining {
+                            panel.sections.push(PropSection {
+                                title: crate::t!("Behavior").into_owned(),
+                                props: vec![Property {
+                                    label: crate::t!("Chain actions").into_owned(),
+                                    field: "authoring_chain_actions",
+                                    value: PropValue::BoolToggle {
+                                        field: "authoring_chain_actions",
+                                        value: chain_actions,
+                                    },
+                                }],
+                            });
+                        }
                         if !value_sets.is_empty() {
                             let mut props = Vec::new();
                             for (key, label, value_set) in value_sets {
@@ -2842,10 +3022,14 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                     ),
                                     _ => continue,
                                 };
+                                let component = match key {
+                                    "xy_x" => crate::tr!("block-value-set", "x-distance"),
+                                    "xy_y" => crate::tr!("block-value-set", "y-distance"),
+                                    _ => crate::t!(label).into_owned(),
+                                };
                                 props.extend([
                                     Property {
-                                        label: crate::tf!("Use {} minimum", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "use-min", label = component.as_str()),
                                         field: minimum_enabled,
                                         value: PropValue::BoolToggle {
                                             field: minimum_enabled,
@@ -2853,8 +3037,7 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                         },
                                     },
                                     Property {
-                                        label: crate::tf!("Use {} maximum", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "use-max", label = component.as_str()),
                                         field: maximum_enabled,
                                         value: PropValue::BoolToggle {
                                             field: maximum_enabled,
@@ -2862,8 +3045,7 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                         },
                                     },
                                     Property {
-                                        label: crate::tf!("Use {} increment", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "use-increment", label = component.as_str()),
                                         field: increment_enabled,
                                         value: PropValue::BoolToggle {
                                             field: increment_enabled,
@@ -2871,11 +3053,7 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                         },
                                     },
                                     Property {
-                                        label: crate::tf!(
-                                            "Use {} allowed-value list",
-                                            crate::t!(label)
-                                        )
-                                        .into_owned(),
+                                        label: crate::tr!("block-value-set", "use-list", label = component.as_str()),
                                         field: values_enabled,
                                         value: PropValue::BoolToggle {
                                             field: values_enabled,
@@ -2883,26 +3061,22 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                         },
                                     },
                                     Property {
-                                        label: crate::tf!("{} minimum", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "min", label = component.as_str()),
                                         field: minimum,
                                         value: PropValue::EditText(value_set.minimum.to_string()),
                                     },
                                     Property {
-                                        label: crate::tf!("{} maximum", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "max", label = component.as_str()),
                                         field: maximum,
                                         value: PropValue::EditText(value_set.maximum.to_string()),
                                     },
                                     Property {
-                                        label: crate::tf!("{} increment", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "increment", label = component.as_str()),
                                         field: increment,
                                         value: PropValue::EditText(value_set.increment.to_string()),
                                     },
                                     Property {
-                                        label: crate::tf!("{} allowed values", crate::t!(label))
-                                            .into_owned(),
+                                        label: crate::tr!("block-value-set", "values", label = component.as_str()),
                                         field: values,
                                         value: PropValue::EditText(
                                             value_set
@@ -2916,7 +3090,7 @@ filter={:.1} local={:.1} aggregate={:.1} entities={}",
                                 ]);
                             }
                             panel.sections.push(PropSection {
-                                title: crate::t!("Value Set").into_owned(),
+                                title: crate::tr!("block-value-set", "title"),
                                 props,
                             });
                         }
@@ -3196,7 +3370,21 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
             } else {
                 selected
             };
-            for (handle, _entity) in selected {
+            // A table whose cells are picked shows no table grips.
+            let picked_table = self.tabs[i].scene.table_cells_handle();
+            for (handle, entity) in selected {
+                if Some(handle) == picked_table {
+                    // Picked cells show their own edge and fill grips.
+                    if let (codec::EntityType::Table(table), Some(cells)) =
+                        (entity, self.tabs[i].scene.table_cells)
+                    {
+                        for grip in crate::entities::table::cell_range_grips(table, cells.range()) {
+                            handles.push(handle);
+                            grips.push(grip);
+                        }
+                    }
+                    continue;
+                }
                 // entity_grips_for errs only for a missing tab/entity; inside
                 // the selection walk the entity exists, so a defensive empty
                 // keeps the cache build total.
@@ -3248,6 +3436,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
         self.refresh_table_grip(wo);
         self.refresh_test_action_grips(wo);
         self.refresh_authoring_grips(wo);
+        self.refresh_array_grips(wo);
     }
 
     /// Enumerate one entity's built-in grips exactly as the selection cache
@@ -3537,6 +3726,7 @@ handles={handles_ms:.1} panel={:.1} ribbon={ribbon_ms:.1} tail={:.1} selected={}
         if handles.is_empty() {
             return;
         }
+        let label: String = label.into();
         self.push_undo_snapshot(i, label);
         for &handle in handles {
             apply(self, handle);
@@ -4699,6 +4889,30 @@ fn set_row_value(
     }
 }
 
+/// A choice row's selection, adding the value to its options when missing.
+fn set_choice_with(
+    sections: &mut [crate::scene::model::object::PropSection],
+    field: &str,
+    value: String,
+) {
+    use crate::scene::model::object::PropValue;
+    for section in sections.iter_mut() {
+        if let Some(row) = section.props.iter_mut().find(|p| p.field == field) {
+            match &mut row.value {
+                PropValue::Choice { selected, options } => {
+                    if !options.contains(&value) {
+                        options.push(value.clone());
+                    }
+                    *selected = value;
+                }
+                PropValue::ReadOnly(current) => *current = value,
+                _ => {}
+            }
+            return;
+        }
+    }
+}
+
 fn update_row_text(
     sections: &mut [crate::scene::model::object::PropSection],
     field: &str,
@@ -4995,6 +5209,75 @@ fn apply_insert_unit_scale(ins: &mut codec::entities::Insert, ratio: f64) -> boo
     true
 }
 
+/// The refusal when a fixed constraint holds an object an edit would move.
+pub(crate) const HELD_BY_FIXED: &str = "The object is held by a fixed constraint.";
+
+/// Whether a Properties row writes the object's geometry. Read-only rows
+/// cannot move anything and keep their own refusal.
+pub(crate) fn property_edits_geometry(p: &crate::scene::model::object::Property) -> bool {
+    use crate::scene::model::object::PropValue;
+    !matches!(
+        p.value,
+        PropValue::ReadOnly(_) | PropValue::ReadOnlyWithTooltip { .. }
+    ) && field_moves_geometry(p.field)
+}
+
+/// Whether the row named `field` changes the shape or placement of a curve.
+/// Covers every entity a Fixed constraint can hold — line, circle, arc,
+/// ellipse, spline and polyline, 2D or 3D. The count and index rows, the
+/// visible/hidden toggles and linetype generation are excluded: they say what
+/// the panel shows or how the curve is drawn between its points. Also left
+/// out: the stored fit tolerance, which nothing reads when the curve is drawn,
+/// and closing a two-vertex polyline, which adds no drawn segment.
+pub(crate) fn field_moves_geometry(field: &str) -> bool {
+    const PREFIXES: [&str; 14] = [
+        "start_",
+        "end_",
+        "center_",
+        "loc_",
+        "ins_",
+        "align_",
+        "vertex_",
+        "normal_",
+        "major_",
+        "minor_",
+        "ctrl_pt_",
+        "fit_pt_",
+        "pl2_",
+        "pl3_vertex_",
+    ];
+    matches!(
+        field,
+        "radius"
+            | "diameter"
+            | "circumference"
+            | "area"
+            | "major_r"
+            | "minor_r"
+            | "ratio"
+            | "start_angle"
+            | "end_angle"
+            | "arc_length"
+            | "height"
+            | "rotation"
+            | "width_factor"
+            | "oblique_angle"
+            | "elevation"
+            | "global_width"
+            | "bulge"
+            | "start_width"
+            | "end_width"
+            | "weight"
+            | "knot_param"
+            | "spline_method"
+            | "pl_closed"
+            | "pl3_closed"
+            | "pl3_smooth"
+    ) || (PREFIXES.iter().any(|prefix| field.starts_with(prefix))
+        && !field.ends_with("_count")
+        && !matches!(field, "pl2_ltype_gen" | "pl2_current_vertex"))
+}
+
 #[cfg(test)]
 mod asym_scale_tests {
     // #47: the uniform-scale opt-out must be per-tab. Fresh documents restart
@@ -5155,6 +5438,45 @@ mod apply_property_op_tests {
     use crate::app::OpenCADStudio;
     use codec::entities::Line;
     use codec::types::{Color, Vector3};
+
+    #[test]
+    fn geometry_rows_are_told_apart_from_display_rows() {
+        for field in [
+            "start_x",
+            "end_z",
+            "center_y",
+            "radius",
+            "area",
+            "major_r",
+            "start_angle",
+            "ctrl_pt_x",
+            "fit_pt_y",
+            "weight",
+            "pl2_vertex_x",
+            "pl2_closed",
+            "pl3_vertex_z",
+            "pl3_smooth",
+            "spline_method",
+            "knot_param",
+        ] {
+            assert!(
+                crate::app::properties::field_moves_geometry(field),
+                "{field} moves geometry"
+            );
+        }
+        for field in [
+            "pl2_ltype_gen",
+            "pl2_current_vertex",
+            "fit_pt_count",
+            "cv_frame",
+            "layer",
+        ] {
+            assert!(
+                !crate::app::properties::field_moves_geometry(field),
+                "{field} only changes how the row is shown or drawn"
+            );
+        }
+    }
 
     fn line_handle(app: &mut OpenCADStudio) -> codec::Handle {
         let mut line = Line::new();

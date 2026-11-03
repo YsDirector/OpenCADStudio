@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = Stílus szerint
     .custom = Egyedi
     .mixed = Vegyes
+    .oblique = Ferde szög
+    .reset-to-style = Vissza a stílushoz (__ocs_fmt_0__)
+    .new-text-style = Új szövegstílus
+    .new-style-from-selection = Új stílus a kijelölésből…
+    .update-style-from-selection = „__ocs_fmt_0__” frissítése a kijelölésből
+    .text-style-manager-dialog = Szövegstílus-kezelő…
+    .style-updated = A „__ocs_fmt_0__” stílus frissítve.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: mentéshez érvényes magasság, szélességi tényező és forgatás szükséges.
@@ -190,6 +197,45 @@ ribbon-menu =
     .menu-bar = Menüsor
     .ribbon-tab = Szalaglap
     .no-matches = Nincs egyező parancs
+    .switch-windows = Ablakváltás
+    .center-layer = Középvonal-fólia
+    .user-interface = Felhasználói felület
+    .no-open-drawings = Nincs megnyitott rajz
+    .viewcube = ViewCube
+    .ucs-icon = FKR ikon
+    .file-tabs = Fájllapok
+    .layout-tabs = Elrendezéslapok
+    .command-line = Parancssor
+    .status-bar = Állapotsor
+    .customize-qat = Gyorselérési eszköztár testreszabása
+    .more-commands = További parancsok…
+    .more-commands-title = Parancs hozzáadása a gyorselérési eszköztárhoz
+    .find-command-to-add = Írja be a hozzáadandó parancsot
+    .show-below = Megjelenítés a szalag alatt
+    .show-above = Megjelenítés a szalag felett
+    .qat-place-unavailable = Nem érhető el, amíg a szalag be van zárva
+    .qat-new = Új
+    .qat-open = Megnyitás
+    .qat-save = Mentés
+    .qat-save-as = Mentés másként
+    .qat-plot = Nyomtatás
+    .qat-undo = Visszavonás
+    .qat-redo = Mégis
+    .qat-measure = Mérés
+    .qat-batch-plot = Kötegelt nyomtatás
+    .qat-match-properties = Tulajdonságok átvétele
+    .qat-plot-preview = Nyomtatási kép
+    .qat-properties = Tulajdonságok
+    .add-to-qat = Hozzáadás a gyorselérési eszköztárhoz
+    .remove-from-qat = Eltávolítás a gyorselérési eszköztárról
+    .add-separator = Elválasztó hozzáadása
+    .remove-separator = Elválasztó eltávolítása
+    .qat-show-below = Gyorselérési eszköztár megjelenítése a szalag alatt
+    .qat-show-above = Gyorselérési eszköztár megjelenítése a szalag felett
+    .return-to-ribbon = Vissza a szalagra
+    .float-title-side = Panelcím oldalt, a további eszközök jobbra nyílnak
+    .float-title-bottom = Panelcím alul, a további eszközök lefelé nyílnak
+    .floating-suffix = {" "}(lebegő)
 
 options =
     .language-section = Nyelv
@@ -3532,6 +3578,9 @@ layers =
     .lock-and-fade = Zárolás és halványítás
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: a LAYISO nem különített el egy fóliát sem.
     .laymatch-select-objects-to-change-layer = LAYMATCH  Válasszon másik fóliára helyezendő objektumokat:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Válassza ki a másolandó objektumokat:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Válasszon egy objektumot a célfólián:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  Válassza a forrásobjektumot, amelynek fóliájára másol:
@@ -3553,6 +3602,7 @@ layers =
     .layer-s-frozen = Fóliák fagyasztva.
     .layer-s-locked = Fóliák zárolva.
     .layer-s-turned-off = Fóliák kikapcsolva.
+    .layoff-select-object-on-layer-undo = LAYOFF  Válasszon objektumot a kikapcsolandó fóliáról vagy [Undo]:
     .layer-s-unlocked = Fóliák zárolása feloldva.
     .layers = Fóliák: __ocs_fmt_0__
     .lock = Zárolás
@@ -3922,6 +3972,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  Adja meg az elforgatási szöget <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE Beszúrási pont megadása:
+    .tcell-row-above =
+        Sor beszúrása
+        fölé
+    .tcell-row-below =
+        Sor beszúrása
+        alá
+    .tcell-delete-rows =
+        Sorok
+        törlése
+    .tcell-col-left =
+        Oszlop beszúrása
+        balra
+    .tcell-col-right =
+        Oszlop beszúrása
+        jobbra
+    .tcell-delete-cols =
+        Oszlopok
+        törlése
+    .tcell-merge =
+        Cellák
+        egyesítése
+    .tcell-unmerge =
+        Egyesítés
+        megszüntetése
+    .tcell-lock =
+        Cella
+        zárolása
+    .tcell-edit =
+        Szöveg
+        szerkesztése
+    .tcell-match =
+        Cella
+        megfeleltetése
+    .tcell-borders =
+        Cella
+        szegélyei
+    .tcell-format =
+        Adat
+        formátuma
+    .tcell-block =
+        Blokk
+        beszúrása
+    .tcell-field =
+        Mező
+        beszúrása
+    .tcell-contents =
+        Cellatartalom
+        kezelése
+    .tcell-link =
+        Cella
+        csatolása
+    .tcell-download =
+        Letöltés
+        a forrásból
+    .tcell-row-style = Sorstílus
+    .tcell-column-style = Oszlopstílus
+    .tcell-width = Cellaszélesség
+    .tcell-height = Cellamagasság
+    .tcell-border-color = Szegély színe
+    .tcell-border-lineweight = Szegély vonalvastagsága
+    .tcell-border-linetype = Szegély vonaltípusa
+    .tcell-locking = Cellazárolás
+    .tcell-data-link = Cella adatkapcsolata
+    .tcell-select-destination = Válassza ki a célcellát:
+    .tcell-select-cell = Válassza ki a táblázatcellát:
+    .tcell-range-first = Válassza ki a cellatartomány első sarkát:
+    .tcell-range-second = Válassza ki a cellatartomány második sarkát:
+    .tcell-align-prompt = Adja meg a cella igazítását [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Adja meg az adatformátumot [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Adja meg a blokk nevét vagy [?]:
+    .tcell-formula-prompt = Adjon meg egy képletet [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = Sor/oszlop szerint
+    .tcell-unlocked = Nem zárolt
+    .tcell-content-locked = Tartalom zárolva
+    .tcell-format-locked = Formátum zárolva
+    .tcell-content-format-locked = Tartalom és formátum zárolva
+    .tcell-not-linked = Nincs csatolva
+    .tcell-invalid-cell = Érvénytelen cella.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  Adja meg a beszúrási pontot:
@@ -6508,9 +6636,57 @@ dimstyle =
     .move-text-outside-first = Először a szöveg kívülre
     .period = Pont
     .space = Szóköz
+    .separator-none = (Nincs)
     .surveyors-units = Földmérési egységek
 
 style-manager =
+    .use-big-font = SHX Big Font használata
+    .number-field-range = Számjegyeket és tizedespontot használjon. Adjon meg egy értéket __ocs_fmt_0__ és __ocs_fmt_1__ között.
+    .number-field-non-negative = Adjon meg 0-t vagy pozitív számot.
+    .number-field-angle = __ocs_fmt_0__° és __ocs_fmt_1__° közötti érték legyen.
+    .one-field-needs-fixing = Az alkalmazás előtt 1 mezőt javítani kell.
+    .fields-need-fixing = Az alkalmazás előtt __ocs_fmt_0__ mezőt javítani kell.
+    .in-this-drawing = Ebben a rajzban
+    .stroke-fonts-shx = Vonalas fontok (SHX)
+    .font-folders = Fontmappák
+    .truetype-fonts = TrueType fontok
+    .font-missing-drawn-with = hiányzik · __ocs_fmt_0__ betűtípussal helyettesítve
+    .turned-off-for-truetype = TrueType betűtípusnál kikapcsolva: __ocs_fmt_0__.
+    .use-typed-font = „__ocs_fmt_0__” használata
+    .face-regular = Normál
+    .face-bold-italic = Félkövér dőlt
+    .font-style = Betűstílus
+    .truetype-fonts-only = Csak TrueType betűtípusnál
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. 1 stílust követő szöveg frissül.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. __ocs_fmt_3__ stílust követő szöveg frissül.
+    .style-update-in-blocks = Blokkdefiníciókban: __ocs_fmt_0__.
+    .style-update-keeps-one = 1 saját értékű szöveg megtartja az értékét.
+    .style-update-keeps-many = __ocs_fmt_0__ saját értékű szöveg megtartja az értékét.
+    .style-update-xref-undo = A külső referenciákban lévő szövegek nem változnak. Egyetlen visszavonás minden módosítást visszaállít.
+    .rename-hint = Átnevezéshez kattints duplán a névre.
+    .modified-was = Módosítva · korábban __ocs_fmt_0__
+    .height-asked-hint = 0 = a magasságot a program a szöveg elhelyezésekor kérdezi meg.
+    .annotative-paper-hint = Bekapcsolva: a fenti magasság a papíron mért magasság.
+    .backward-hint = A Visszafelé és a Fejjel lefelé az egysoros szövegre és az attribútumokra hat, az MTEXT-re nem.
+    .on-apply = Alkalmazáskor változik
+    .sample-text = Mintaszöveg
+    .where-used = A stílust használó szövegek
+    .kind-single-line-text = Egysoros szöveg
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Attribútum-definíciók
+    .no-texts-use-style = Egyetlen szöveg sem használja ezt a stílust.
+    .inside-one-block = Ebből __ocs_fmt_0__ 1 blokkdefinícióban.
+    .inside-blocks = Ebből __ocs_fmt_0__ __ocs_fmt_1__ blokkdefinícióban.
+    .used-by-one-text = 1 szöveg használja
+    .used-by-texts = __ocs_fmt_0__ szöveg használja
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = A stílus egyéb tárolt beállításai is változnak.
+    .annotative-change-note = A meglévő szövegek megtartják a saját beállításukat; az új szövegek ezt kapják.
+    .style-redraw-one = 1 stílust használó szöveg újrarajzolódik; az MTEXT-en belül megadott formázás megmarad.
+    .style-redraw-many = __ocs_fmt_0__ stílust használó szöveg újrarajzolódik; az MTEXT-en belül megadott formázás megmarad.
+    .apply-count-one = 1 stílus, 1 tulajdonság
+    .apply-count-one-style = 1 stílus, __ocs_fmt_0__ tulajdonság
+    .apply-count-many = __ocs_fmt_0__ stílus, __ocs_fmt_1__ tulajdonság
     .import-styles = Stílusok importálása
     .select-drawing-to-import-styles-from = Válassza ki a rajzot, amelyből stílusokat szeretne importálni
     .select-the-styles-to-import = Válassza ki az importálandó stílusokat
@@ -6523,7 +6699,7 @@ style-manager =
     .always-left-align = Mindig balra igazítás
     .attachment-direction = Rögzítési irány
     .background-fill-enabled = Háttérkitöltés engedélyezve
-    .big-font = Nagy betűtípus
+    .big-font = Big Font fájl
     .block-scale-x = Blokk X-léptéke
     .block-scale-y = Blokk Y-léptéke
     .block-scale-z = Blokk Z-léptéke
@@ -7795,7 +7971,7 @@ table-cmd =
     .ctablestyle-invalid = Cannot set CTABLESTYLE to that value.
     .style-button = Table Style…
     .lines = Line(s)
-    .styles-in-use = Styles in use
+    .styles-in-use = Használt stílusok
 
 center-cmd =
     .mark-select = CENTERMARK  Select circle or arc to add center mark or [Layer]:
@@ -8003,3 +8179,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Elemek száma
+    .row-count = Sorok száma
+    .row-and-column-count = Sorok és oszlopok száma
+    .item-count = Elemek száma
+    .angle-between-items = Elemek közötti szög
+    .prompt-columns = Adja meg az oszlopok számát (Ctrl: teljes oszloptávolság):
+    .prompt-rows = Adja meg a sorok számát (Ctrl: teljes sortávolság):
+    .prompt-rows-columns = Adja meg a sorok és oszlopok számát:
+    .prompt-items = Adja meg az elemek számát (Ctrl: kitöltési szög vagy teljes távolság):
+    .prompt-column-spacing = Adja meg az oszlopok közötti távolságot:
+    .prompt-row-spacing = Adja meg a sorok közötti távolságot:
+    .prompt-item-spacing = Adja meg az elemek közötti távolságot:
+    .prompt-item-angle = Adja meg az elemek közötti szöget:
+    .prompt-radius = Adja meg a sugarat:
+block-chain =
+    .label = Műveletek láncolása
+    .cycle = A blokk műveletlánca ciklust tartalmaz.
+
+block-action-bars =
+    .requires-session = A BACTIONBAR aktív blokkszerkesztő-munkamenetet igényel.
+    .enable-display = A műveletsávok megjelenítéséhez állítsa a BACTIONBARMODE értékét 1-re.
+    .parameters-changed = A paraméterlista megváltozott; indítsa újra a BACTIONBAR parancsot.
+    .display-updated = A műveletsávok megjelenítése frissült.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Válasszon paramétert, adja meg a nevét vagy [All] <Kijelölt>:
+    .prompt-all = BACTIONBAR  Válasszon paramétert, adja meg a nevét vagy [All] <All>:
+    .choose-mode = Válasszon: Show, Hide vagy Reset.
+    .unique-parameter = Adjon meg egyedi paraméternevet, válassza ki a végpontját vagy válassza az All lehetőséget.
+    .enter-parameter = Adjon meg egy paraméternevet vagy válassza az All lehetőséget.
+    .pick-endpoint = Válasszon paramétervégpontot vagy válassza az All lehetőséget.
+
+block-construction =
+    .requires-session = A BCONSTRUCTION csak a blokkszerkesztőben érhető el.
+    .choose-operation = Válasszon: Convert, Revert, Show vagy Hide.
+    .stale-session = A szerkesztési geometria blokkszerkesztő-munkamenete már nem aktív.
+    .changed-count = __ocs_fmt_0__ geometriai objektum módosult.
+    .prompt-selection = BCONSTRUCTION  Válasszon geometriát vagy [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  Válasszon [Convert/Revert] <Convert>, vagy nyomja meg az Entert a kijelölt művelet alkalmazásához:
+    .revert = Visszaállítás
+    .history = Szerkesztési geometria módosítása
+    .unsupported-record = Ez a szerkesztésigeometria-rekord nem támogatott verziót vagy értéket tartalmaz.
+    .open-definition = A szerkesztési geometria módosítása előtt nyisson meg egy blokkdefiníciót.
+    .missing-object = Egy kijelölt szerkesztésigeometria-objektum már nem érhető el.
+    .active-geometry = Válasszon geometriát az aktív blokkdefinícióban.
+    .locked-layer = Zárolt fólián nem módosítható a szerkesztési geometria.
+    .revert-layer = Válasszon meglévő, nem zárolt fóliát a visszaállított geometriához.
+
+block-authoring-history =
+    .alignment-type = Igazítás típusa
+    .action-override = Blokkművelet felülbírálásának szerkesztése
+    .action-chain = Blokkművelet-lánc szerkesztése
+    .action-base = Blokkművelet bázispontjának szerkesztése
+    .parameter-chain = BEDIT Paraméterműveletek láncolása
+    .value-set = BEDIT Paraméterérték-készlet
+    .parameter-metadata = Blokkparaméter metaadatainak szerkesztése
+    .authoring-grip = Blokklétrehozási fogópont
+
+block-operation-history =
+    .reset-references = Blokkreferenciák alaphelyzetbe állítása
+    .associate-action = Blokkművelet társítása
+    .action-selection = Művelet kiválasztási halmaza
+    .test-parameter = Tesztblokk paramétere
+    .reference-parameter = Blokkreferencia paramétere
+    .align-reference = Blokkreferencia igazítása
+    .insertion-grip-order = Beszúrási fogópontok sorrendjének módosítása
+    .move-grip = Natív blokkfogópont mozgatása
+    .configure-grips = Blokkparaméterek fogópontjainak beállítása
+    .lookup-tables = Keresési táblák
+    .hyperlink = Blokk hiperhivatkozása
+    .properties = Blokk tulajdonságai
+    .properties-table = Blokktulajdonság-táblázat
+    .visibility-state = Láthatósági állapot
+    .visibility-states = Láthatósági állapotok
+
+block-formatted-history =
+    .action = { $label } művelet
+    .parameter = { $label } paraméter
+    .edit-block = { $label } blokk szerkesztése
+    .save-block = Blokk mentése { $label } néven
+    .delete-block = { $label } blokk törlése
+
+block-history-kinds =
+    .flip = Átfordítás
+    .polar-stretch = Poláris nyújtás
+    .basepoint = Bázispont
+    .lookup = Keresés
+
+block-action-properties =
+    .base-point = Művelet bázispontja
+    .overrides = Művelet felülbírálásai
+    .multiplier = Távolságszorzó
+    .angle-offset = Szögeltolás (fok)
+    .chain = Műveletlánc
+    .chain-to = Láncolás ehhez
+
+block-parameter-properties =
+    .show-properties = Megjelenítés a tulajdonságokban
+    .parameter-name = Paraméter neve
+    .grip-count = Fogópontok száma
+    .dependent-base = Függő bázispont
+    .offset-x = Báziseltolás X
+    .offset-y = Báziseltolás Y
+    .base-grip = Bázisfogópont helye
+    .end-grip = Végfogópont helye
+    .x-grip = X fogópont helye
+    .y-grip = Y fogópont helye
+
+block-value-set =
+    .use-min = { $label } minimum használata
+    .use-max = { $label } maximum használata
+    .use-increment = { $label } lépésköz használata
+    .use-list = { $label } engedélyezett értéklista használata
+    .min = { $label } minimum
+    .max = { $label } maximum
+    .increment = { $label } lépésköz
+    .values = { $label } engedélyezett értékek
+    .title = Értékkészlet
+    .x-distance = X távolság
+    .y-distance = Y távolság
+
+table-style-cells =
+    .tbl-start-from-style = Kezdés táblázatstílusból
+    .tbl-extra-columns = További oszlopok
+    .tbl-extra-rows = További sorok
+    .tbl-keep-from-template = Megtartás a kezdő táblázatból:
+    .tbl-keep-label-text = Címkecellák szövege
+    .tbl-keep-data-text = Adatcellák szövege
+    .tbl-keep-overrides = Cellastílus-felülbírálások
+    .tbl-keep-links = Adatkapcsolatok
+    .tbl-keep-fields = Mezők
+    .tbl-keep-formulas = Képletek
+    .tbl-extra-whole = A további sorok és oszlopok számának egész számnak kell lennie.
+    .from-style-insertion = __ocs_arg_n__  Adja meg a beszúrási pontot vagy [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Adja meg egy táblázatstílus nevét vagy [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Adja meg a további sorok számát <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Adja meg a további oszlopok számát <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Adjon meg egy beszúrási opciót [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  Kerüljön __ocs_arg_what__ a beszúrt táblázatba? [Yes/No] <__ocs_arg_current__>:
+    .label-text = címkeszöveg
+    .data-text = adatszöveg
+    .formulas = képletek
+    .fields = mezők
+    .data-links = adatkapcsolatok
+    .blocks = blokkok
+    .cell-style-overrides = cellastílus-felülbírálások
+    .style-name-header = Táblázatstílus neve
+    .no-starting-table = A táblázatstílus nem tartalmaz táblázatot.
+    .select-table = Válasszon ki egy táblázatot:
+    .not-a-table = Az objektum nem táblázat.
+    .cell-style-exists = Már létezik ilyen nevű cellastílus.
+    .cell-style-in-use = A cellastílus használatban van, nem törölhető.
+    .template-size = __ocs_arg_rows__ sor × __ocs_arg_columns__ oszlop
+    .cell-properties = Cella tulajdonságai
+    .cell-text = Cella szövege
+    .cell-borders = Cella szegélyei
+    .cell-styles = Cellastílusok
+    .label = Címke
+    .margins = Margók
+    .merge-on-create = Cellák egyesítése sor/oszlop létrehozásakor
+    .new-from-this = Új ebből
+    .new-name = Új név
+    .real-number = Valós szám
+    .whole-number = Egész szám
+    .select-table-button = Táblázat kiválasztása…
+    .starting-table = Kezdő táblázat
+    .table-direction = Táblázat iránya
+
+table-cells =
+    .borders-title = Cella szegélyei
+    .contents-title = Cella tartalma
+    .line = Vonal
+    .lineweight = Vonalvastagság
+    .linetype = Vonaltípus
+    .color = Szín
+    .double = Dupla vonal
+    .spacing = Térköz
+    .apply-to = Alkalmazás
+    .all = Mind
+    .outside = Külső
+    .inside = Belső
+    .none = Nincs
+    .top = Felső
+    .bottom = Alsó
+    .left = Bal
+    .right = Jobb
+    .inside-horizontal = Belső vízszintes
+    .inside-vertical = Belső függőleges
+    .contents = Tartalom
+    .empty = A cella üres.
+    .move-up = Feljebb
+    .move-down = Lejjebb
+    .delete = Törlés
+    .layout = Elrendezés
+    .flow = Folyamatos
+    .stack-horizontal = Vízszintesen egymás mellett
+    .stack-vertical = Függőlegesen egymás alatt
+    .content-spacing = Térköz
+    .block-item = Blokk: { $name }
+    .text-item = Szöveg: { $text }
+    .text-content = Táblázatcella szövege
+    .borders-help = Beállítja a kijelölt cellák szegélyeinek vonalvastagságát, vonaltípusát és színét; válassza ki, mely éleken legyenek.
+    .contents-help = Sorba rendezi, eltávolítja és elrendezi a kijelölt cella tartalmát.
+    .block-title = Cellablokk
+    .format-title = Cella adatformátuma
+    .block = Blokk
+    .block-name = Név
+    .browse = Tallózás...
+    .block-path = Elérési út
+    .placement = Elhelyezés
+    .alignment = Cellaigazítás
+    .scale = Lépték
+    .autofit = Automatikus illesztés
+    .rotation = Forgatási szög
+    .format = Formátum
+    .current-precision = Aktuális pontosság
+    .precision = Pontosság
+    .symbol = Szimbólum
+    .append-symbol = Szimbólum utána
+    .negative-parens = Negatív értékek zárójelben
+    .list-separator = Listaelválasztó
+    .date-format = Dátumformátum
+    .no-format-settings = Ennek az adattípusnak nincsenek formátumbeállításai.
+    .data-type = Adattípus
+    .format-settings = Formátum
+    .currency = Pénznem
+    .decimal-number = Tizedes szám
+    .percentage = Százalék
+    .whole-number = Egész szám
+    .grads = Újfok
+    .sample-text = mintaszöveg
+    .block-help = Blokkot helyez a kijelölt cellákba: a helyét, a léptékét (vagy cellához illesztve) és az elforgatását.
+    .format-help = Beállítja, milyen adattípussal és formátummal olvasódnak a kijelölt cellák értékei.
+    .additional-format = További formátum
+    .conversion = Átváltási tényező
+    .prefix = Előtag
+    .suffix = Utótag
+    .decimal-separator = Tizedesjel
+    .thousands-separator = Ezreselválasztó
+    .space = Szóköz
+    .separator-none = (Nincs)
+    .zero-leading = Kezdő nullák
+    .zero-trailing = Záró nullák
+    .zero-feet = 0 láb
+    .zero-inches = 0 hüvelyk
+    .warning-title = Az adattípus nem egyezik
+    .warning-heading = Ezek a cellák a választott adattípustól eltérő értékeket tartalmaznak.
+    .warning-note = Az átalakítás minden értéket az új típusként olvas; a nem olvasható érték törlődik. A Mégse változatlanul hagyja a cellákat.
+    .warning-ok = Átalakítás
+    .warning-cancel = Mégse
+
+parameters-manager =
+    .action-parameters = Műveletparaméterek
+    .filter = Név*
+    .search = Paraméter keresése
+    .order = Sorrend
+    .polar = Poláris
+    .visibility = Láthatóság
+    .variable = Változó
+    .footer = Összes: { $shown } / { $total } paraméter látható
+
+parameters-manager-feedback =
+    .no-number = Ebben a sorban nincs szerkeszthető szám.
+    .no-flag = Ebben a sorban nincs módosítható láthatósági jelző.
+    .finite-number = Adjon meg véges numerikus paraméterértéket.
+    .stale-session = A blokkszerkesztő munkamenete már nem aktív.
+    .positive-length = Adjon meg pozitív paraméterhosszt.
+    .no-direction = A paraméter iránya nem érhető el.
+    .history = Paraméterkezelő szerkesztése
+
+block-action-targets =
+    .prompt = BACTIONSET  Válasszon objektumokat, vagy írja be a Parameter szót és egy pont nevét, majd nyomjon Entert (Parameter "…"):
+    .create-prompt = BACTION  Válasszon objektumokat, vagy írja be a Parameter szót és egy pont nevét, majd nyomjon Entert (Parameter "…"):
+    .unique-point = Adjon meg egyedi pontparaméter-nevet.
+    .empty = Egy művelethez legalább egy cél szükséges.
+    .invalid = Válasszon a blokkhoz tartozó támogatott célokat.
+    .stale = A művelet vagy a blokkszerkesztő munkamenete megváltozott; indítsa újra a BACTIONSET parancsot.
+    .create-stale = A művelet vagy a blokkszerkesztő munkamenete megváltozott; indítsa újra a BACTION parancsot.

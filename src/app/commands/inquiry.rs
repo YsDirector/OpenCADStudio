@@ -31,6 +31,11 @@ impl OpenCADStudio {
                 .push_info(crate::t!("Select objects").as_ref());
             return;
         }
+        if self.any_entity_is_fixed(i, &handles) {
+            self.command_line
+                .push_error(crate::app::properties::HELD_BY_FIXED);
+            return;
+        }
 
         let bounds: Vec<_> = self.tabs[i]
             .scene
@@ -91,6 +96,9 @@ impl OpenCADStudio {
                 self.command_line
                     .push_output(crate::tf!("SELECTALL: {} object(s) selected.", count).as_ref());
                 self.refresh_properties();
+                // Same as SELECTSIMILAR: leave the command field so Ctrl+C
+                // reaches COPYCLIP.
+                return Some(self.unfocus_widgets());
             }
 
             "DESELECT" | "DESELALL" => {

@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = 倾斜角
+    .reset-to-style = 重置为样式 (__ocs_fmt_0__)
+    .new-text-style = 新建文字样式
+    .new-style-from-selection = 从所选内容新建样式…
+    .update-style-from-selection = 从所选内容更新“__ocs_fmt_0__”
+    .text-style-manager-dialog = 文字样式管理器…
+    .style-updated = 样式“__ocs_fmt_0__”已更新。
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = 菜单栏
     .ribbon-tab = 功能区选项卡
     .no-matches = 没有匹配的命令
+    .switch-windows = 切换窗口
+    .center-layer = 中心线图层
+    .user-interface = 用户界面
+    .no-open-drawings = 没有打开的图形
+    .viewcube = ViewCube
+    .ucs-icon = UCS 图标
+    .file-tabs = 文件选项卡
+    .layout-tabs = 布局选项卡
+    .command-line = 命令行
+    .status-bar = 状态栏
+    .customize-qat = 自定义快速访问工具栏
+    .more-commands = 更多命令…
+    .more-commands-title = 将命令添加到快速访问工具栏
+    .find-command-to-add = 输入要添加的命令
+    .show-below = 在功能区下方显示
+    .show-above = 在功能区上方显示
+    .qat-place-unavailable = 功能区关闭时不可用
+    .qat-new = 新建
+    .qat-open = 打开
+    .qat-save = 保存
+    .qat-save-as = 另存为
+    .qat-plot = 打印
+    .qat-undo = 放弃
+    .qat-redo = 重做
+    .qat-measure = 测量
+    .qat-batch-plot = 批处理打印
+    .qat-match-properties = 特性匹配
+    .qat-plot-preview = 打印预览
+    .qat-properties = 特性
+    .add-to-qat = 添加到快速访问工具栏
+    .remove-from-qat = 从快速访问工具栏中删除
+    .add-separator = 添加分隔符
+    .remove-separator = 删除分隔符
+    .qat-show-below = 在功能区下方显示快速访问工具栏
+    .qat-show-above = 在功能区上方显示快速访问工具栏
+    .return-to-ribbon = 返回到功能区
+    .float-title-side = 面板标题在侧面，附加工具向右展开
+    .float-title-bottom = 面板标题在底部，附加工具向下展开
+    .floating-suffix = （浮动）
 
 options =
     .language-section = 语言
@@ -3519,6 +3565,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO:被隔离的__ocs_fmt_0__层.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO：没有图层被 LAYISO 隔离。
     .laymatch-select-objects-to-change-layer = LAYMATCH 选择要更改层的对象 :
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  选择要复制的对象：
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  选择目标图层上的对象：
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH 选择源对象以匹配图层 :
@@ -3540,6 +3589,7 @@ layers =
     .layer-s-frozen = 层被冻结 。
     .layer-s-locked = 层已锁定 。
     .layer-s-turned-off = 层已关闭 。
+    .layoff-select-object-on-layer-undo = LAYOFF  选择要关闭的图层上的对象或 [Undo]:
     .layer-s-unlocked = 层已解锁 。
     .layers = 图层 : __ocs_fmt_0__
     .lock = 锁定
@@ -3917,6 +3967,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  指定旋转角度 <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE  指定插入点：
+    .tcell-row-above =
+        在上方
+        插入行
+    .tcell-row-below =
+        在下方
+        插入行
+    .tcell-delete-rows =
+        删除
+        行
+    .tcell-col-left =
+        在左侧
+        插入列
+    .tcell-col-right =
+        在右侧
+        插入列
+    .tcell-delete-cols =
+        删除
+        列
+    .tcell-merge =
+        合并
+        单元格
+    .tcell-unmerge =
+        取消合并
+        单元格
+    .tcell-lock =
+        单元格
+        锁定
+    .tcell-edit =
+        编辑
+        文字
+    .tcell-match =
+        匹配
+        单元格
+    .tcell-borders =
+        单元格
+        边框
+    .tcell-format =
+        数据
+        格式
+    .tcell-block =
+        插入
+        块
+    .tcell-field =
+        插入
+        字段
+    .tcell-contents =
+        管理单元格
+        内容
+    .tcell-link =
+        链接
+        单元格
+    .tcell-download =
+        从源
+        下载
+    .tcell-row-style = 行样式
+    .tcell-column-style = 列样式
+    .tcell-width = 单元格宽度
+    .tcell-height = 单元格高度
+    .tcell-border-color = 边框颜色
+    .tcell-border-lineweight = 边框线宽
+    .tcell-border-linetype = 边框线型
+    .tcell-locking = 单元格锁定
+    .tcell-data-link = 单元格数据链接
+    .tcell-select-destination = 选择目标单元格:
+    .tcell-select-cell = 选择表格单元格:
+    .tcell-range-first = 选择表格单元格范围的第一个角点:
+    .tcell-range-second = 选择表格单元格范围的第二个角点:
+    .tcell-align-prompt = 输入单元格对齐方式 [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = 输入数据格式 [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = 输入块名或 [?]:
+    .tcell-formula-prompt = 输入公式 [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = 按行/列
+    .tcell-unlocked = 未锁定
+    .tcell-content-locked = 内容已锁定
+    .tcell-format-locked = 格式已锁定
+    .tcell-content-format-locked = 内容和格式已锁定
+    .tcell-not-linked = 未链接
+    .tcell-invalid-cell = 无效的单元格。
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  指定插入点:
@@ -6511,9 +6639,57 @@ dimstyle =
     .move-text-outside-first = 优先将文字移到外部
     .period = 句点
     .space = 空格
+    .separator-none = (无)
     .surveyors-units = 测量单位
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = 此图形中
+    .stroke-fonts-shx = 笔画字体 (SHX)
+    .font-folders = 字体文件夹
+    .truetype-fonts = TrueType 字体
+    .font-missing-drawn-with = 缺失 · 以 __ocs_fmt_0__ 绘制
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = 使用“__ocs_fmt_0__”
+    .face-regular = 常规
+    .face-bold-italic = 粗斜体
+    .font-style = 字体样式
+    .truetype-fonts-only = 仅限 TrueType 字体
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. 将更新 1 个遵循样式的文字。
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. 将更新 __ocs_fmt_3__ 个遵循样式的文字。
+    .style-update-in-blocks = 在块定义中：__ocs_fmt_0__。
+    .style-update-keeps-one = 1 个有自身值的文字保持该值。
+    .style-update-keeps-many = __ocs_fmt_0__ 个有自身值的文字保持该值。
+    .style-update-xref-undo = 外部参照中的文字不会更改。与样式更改合为一个撤消步骤。
+    .rename-hint = 双击名称可重命名。
+    .modified-was = 已修改 · 原为 __ocs_fmt_0__
+    .height-asked-hint = 0 = 放置文字时询问高度。
+    .annotative-paper-hint = 开启：上面的高度为图纸高度。
+    .backward-hint = 反向和颠倒影响单行文字和属性，不影响 MTEXT。
+    .on-apply = 应用时
+    .sample-text = 示例文字
+    .where-used = 使用位置
+    .kind-single-line-text = 单行文字
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = 属性定义
+    .no-texts-use-style = 没有文字使用此样式。
+    .inside-one-block = 其中 __ocs_fmt_0__ 个位于 1 个块定义中。
+    .inside-blocks = 其中 __ocs_fmt_0__ 个位于 __ocs_fmt_1__ 个块定义中。
+    .used-by-one-text = 1 个文字使用
+    .used-by-texts = __ocs_fmt_0__ 个文字使用
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = 导入样式
     .select-drawing-to-import-styles-from = 选择要从中导入样式的图形
     .select-the-styles-to-import = 选择要导入的样式
@@ -7996,3 +8172,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = 项目数
+    .row-count = 行数
+    .row-and-column-count = 行数和列数
+    .item-count = 项目数
+    .angle-between-items = 项目间角度
+    .prompt-columns = 指定列数 (Ctrl: 列间距总计):
+    .prompt-rows = 指定行数 (Ctrl: 行间距总计):
+    .prompt-rows-columns = 指定行数和列数:
+    .prompt-items = 指定项目数 (Ctrl: 填充角度或间距总计):
+    .prompt-column-spacing = 指定列之间的距离:
+    .prompt-row-spacing = 指定行之间的距离:
+    .prompt-item-spacing = 指定项目之间的距离:
+    .prompt-item-angle = 指定项目之间的角度:
+    .prompt-radius = 指定半径:
+block-chain =
+    .label = 链式动作
+    .cycle = 块的动作链中存在循环。
+
+block-action-bars =
+    .requires-session = BACTIONBAR 需要处于活动状态的块编辑器会话。
+    .enable-display = 将 BACTIONBARMODE 设为 1 以显示动作栏。
+    .parameters-changed = 参数列表已更改；请重新运行 BACTIONBAR。
+    .display-updated = 动作栏显示已更新。
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  选择参数、输入其名称或 [All] <已选>:
+    .prompt-all = BACTIONBAR  选择参数、输入其名称或 [All] <All>:
+    .choose-mode = 请选择 Show、Hide 或 Reset。
+    .unique-parameter = 请输入唯一的参数名称、拾取其端点或选择 All。
+    .enter-parameter = 请输入参数名称或选择 All。
+    .pick-endpoint = 请拾取参数端点或选择 All。
+
+block-construction =
+    .requires-session = BCONSTRUCTION 仅在块编辑器中可用。
+    .choose-operation = 请选择 Convert、Revert、Show 或 Hide。
+    .stale-session = 构造几何图形的块编辑器会话已不再处于活动状态。
+    .changed-count = 已更改 __ocs_fmt_0__ 个几何对象。
+    .prompt-selection = BCONSTRUCTION  选择几何图形或 [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  选择 [Convert/Revert] <Convert>，或按 Enter 应用所选操作:
+    .revert = 还原
+    .history = 编辑构造几何图形
+    .unsupported-record = 此构造记录的版本或值不受支持。
+    .open-definition = 编辑构造几何图形前，请先打开块定义。
+    .missing-object = 选定的构造对象已不可用。
+    .active-geometry = 请选择活动块定义中的几何图形。
+    .locked-layer = 无法更改锁定图层上的构造几何图形。
+    .revert-layer = 请为还原的几何图形选择现有的未锁定图层。
+
+block-authoring-history =
+    .alignment-type = 对齐类型
+    .action-override = 编辑块动作替代
+    .action-chain = 编辑块动作链
+    .action-base = 编辑块动作基点
+    .parameter-chain = BEDIT 链接参数动作
+    .value-set = BEDIT 参数值集
+    .parameter-metadata = 编辑块参数元数据
+    .authoring-grip = 块创作夹点
+
+block-operation-history =
+    .reset-references = 重置块参照
+    .associate-action = 关联块动作
+    .action-selection = 动作选择集
+    .test-parameter = 测试块参数
+    .reference-parameter = 块参照参数
+    .align-reference = 对齐块参照
+    .insertion-grip-order = 更改插入夹点顺序
+    .move-grip = 移动原生块夹点
+    .configure-grips = 配置块参数夹点
+    .lookup-tables = 查寻表
+    .hyperlink = 块超链接
+    .properties = 块特性
+    .properties-table = 块特性表
+    .visibility-state = 可见性状态
+    .visibility-states = 可见性状态列表
+
+block-formatted-history =
+    .action = { $label } 动作
+    .parameter = { $label } 参数
+    .edit-block = 编辑块 { $label }
+    .save-block = 将块另存为 { $label }
+    .delete-block = 删除块 { $label }
+
+block-history-kinds =
+    .flip = 翻转
+    .polar-stretch = 极轴拉伸
+    .basepoint = 基点
+    .lookup = 查寻
+
+block-action-properties =
+    .base-point = 动作基点
+    .overrides = 动作替代
+    .multiplier = 距离倍数
+    .angle-offset = 角度偏移（度）
+    .chain = 动作链
+    .chain-to = 链接到
+
+block-parameter-properties =
+    .show-properties = 在特性中显示
+    .parameter-name = 参数名称
+    .grip-count = 夹点数量
+    .dependent-base = 从属基点
+    .offset-x = 基点偏移 X
+    .offset-y = 基点偏移 Y
+    .base-grip = 基点夹点位置
+    .end-grip = 端点夹点位置
+    .x-grip = X 夹点位置
+    .y-grip = Y 夹点位置
+
+block-value-set =
+    .use-min = 使用 { $label } 最小值
+    .use-max = 使用 { $label } 最大值
+    .use-increment = 使用 { $label } 增量
+    .use-list = 使用 { $label } 允许值列表
+    .min = { $label } 最小值
+    .max = { $label } 最大值
+    .increment = { $label } 增量
+    .values = { $label } 允许值
+    .title = 值集
+    .x-distance = X 距离
+    .y-distance = Y 距离
+
+table-style-cells =
+    .tbl-start-from-style = 从表格样式开始
+    .tbl-extra-columns = 附加列
+    .tbl-extra-rows = 附加行
+    .tbl-keep-from-template = 从起始表格保留:
+    .tbl-keep-label-text = 标签单元格文字
+    .tbl-keep-data-text = 数据单元格文字
+    .tbl-keep-overrides = 单元格样式替代
+    .tbl-keep-links = 数据链接
+    .tbl-keep-fields = 字段
+    .tbl-keep-formulas = 公式
+    .tbl-extra-whole = 附加行数和列数必须为整数。
+    .from-style-insertion = __ocs_arg_n__  指定插入点或 [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  输入表格样式名称或 [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  输入附加行数 <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  输入附加列数 <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  输入插入选项 [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  在插入的表格中包含__ocs_arg_what__? [Yes/No] <__ocs_arg_current__>:
+    .label-text = 标签文字
+    .data-text = 数据文字
+    .formulas = 公式
+    .fields = 字段
+    .data-links = 数据链接
+    .blocks = 块
+    .cell-style-overrides = 单元格样式替代
+    .style-name-header = 表格样式名称
+    .no-starting-table = 表格样式不包含表格。
+    .select-table = 选择表格:
+    .not-a-table = 该对象不是表格。
+    .cell-style-exists = 已存在同名的单元格样式。
+    .cell-style-in-use = 该单元格样式正在使用中，无法删除。
+    .template-size = __ocs_arg_rows__ 行 × __ocs_arg_columns__ 列
+    .cell-properties = 单元格特性
+    .cell-text = 单元格文字
+    .cell-borders = 单元格边框
+    .cell-styles = 单元格样式
+    .label = 标签
+    .margins = 页边距
+    .merge-on-create = 创建行/列时合并单元格
+    .new-from-this = 基于此新建
+    .new-name = 新名称
+    .real-number = 实数
+    .whole-number = 整数
+    .select-table-button = 选择表格…
+    .starting-table = 起始表格
+    .table-direction = 表格方向
+
+table-cells =
+    .borders-title = 单元格边框
+    .contents-title = 单元格内容
+    .line = 线
+    .lineweight = 线宽
+    .linetype = 线型
+    .color = 颜色
+    .double = 双线
+    .spacing = 间距
+    .apply-to = 应用于
+    .all = 全部
+    .outside = 外部
+    .inside = 内部
+    .none = 无
+    .top = 上
+    .bottom = 下
+    .left = 左
+    .right = 右
+    .inside-horizontal = 内部水平
+    .inside-vertical = 内部垂直
+    .contents = 内容
+    .empty = 单元格为空。
+    .move-up = 上移
+    .move-down = 下移
+    .delete = 删除
+    .layout = 布局
+    .flow = 流动
+    .stack-horizontal = 水平堆叠
+    .stack-vertical = 垂直堆叠
+    .content-spacing = 间距
+    .block-item = 块: { $name }
+    .text-item = 文字: { $text }
+    .text-content = 表格单元格文字
+    .borders-help = 设置所选单元格边框的线宽、线型和颜色；选择应用的边。
+    .contents-help = 排序、删除并布置所选单元格的内容。
+    .block-title = 单元格块
+    .format-title = 单元格数据格式
+    .block = 块
+    .block-name = 名称
+    .browse = 浏览...
+    .block-path = 路径
+    .placement = 放置
+    .alignment = 单元格对齐
+    .scale = 比例
+    .autofit = 自动调整
+    .rotation = 旋转角度
+    .format = 格式
+    .current-precision = 当前精度
+    .precision = 精度
+    .symbol = 符号
+    .append-symbol = 符号后置
+    .negative-parens = 负数加括号
+    .list-separator = 列表分隔符
+    .date-format = 日期格式
+    .no-format-settings = 此数据类型没有格式设置。
+    .data-type = 数据类型
+    .format-settings = 格式
+    .currency = 货币
+    .decimal-number = 十进制数
+    .percentage = 百分比
+    .whole-number = 整数
+    .grads = 百分度
+    .sample-text = 示例文字
+    .block-help = 将块放入所选单元格：设置其位置、比例（或适应单元格）和旋转。
+    .format-help = 设置读取所选单元格值时使用的数据类型和格式。
+    .additional-format = 附加格式
+    .conversion = 转换系数
+    .prefix = 前缀
+    .suffix = 后缀
+    .decimal-separator = 小数分隔符
+    .thousands-separator = 千位分隔符
+    .space = 空格
+    .separator-none = (无)
+    .zero-leading = 前导零
+    .zero-trailing = 后续零
+    .zero-feet = 0 英尺
+    .zero-inches = 0 英寸
+    .warning-title = 数据类型不匹配
+    .warning-heading = 这些单元格包含不属于所选数据类型的值。
+    .warning-note = 转换会将每个值按新类型读取；无法读取的值将被清除。取消则保持单元格不变。
+    .warning-ok = 转换
+    .warning-cancel = 取消
+
+parameters-manager =
+    .action-parameters = 动作参数
+    .filter = 名称*
+    .search = 搜索参数
+    .order = 顺序
+    .polar = 极轴
+    .visibility = 可见性
+    .variable = 变量
+    .footer = 全部：显示 { $total } 个参数中的 { $shown } 个
+
+parameters-manager-feedback =
+    .no-number = 此行没有可编辑的数值。
+    .no-flag = 此行没有可更改的可见性标志。
+    .finite-number = 请指定有限的数值参数值。
+    .stale-session = 块编辑器会话已不再处于活动状态。
+    .positive-length = 请指定正的参数长度。
+    .no-direction = 参数方向不可用。
+    .history = 参数管理器编辑
+
+block-action-targets =
+    .prompt = BACTIONSET  选择对象，或输入 Parameter 后跟点名称，然后按 Enter (Parameter "…"):
+    .create-prompt = BACTION  选择对象，或输入 Parameter 后跟点名称，然后按 Enter (Parameter "…"):
+    .unique-point = 请输入唯一的点参数名称。
+    .empty = 动作至少需要一个目标。
+    .invalid = 请选择属于此块的受支持目标。
+    .stale = 动作或块编辑器会话已更改；请重新运行 BACTIONSET。
+    .create-stale = 动作或块编辑器会话已更改；请重新运行 BACTION。

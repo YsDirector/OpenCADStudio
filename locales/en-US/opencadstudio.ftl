@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = Oblique
+    .reset-to-style = Reset to style (__ocs_fmt_0__)
+    .new-text-style = New text style
+    .new-style-from-selection = New style from selection…
+    .update-style-from-selection = Update “__ocs_fmt_0__” from selection
+    .text-style-manager-dialog = Text Style Manager…
+    .style-updated = Style '__ocs_fmt_0__' updated.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = Menu Bar
     .ribbon-tab = Ribbon Tab
     .no-matches = No matching commands
+    .switch-windows = Switch Windows
+    .center-layer = Center Layer
+    .user-interface = User Interface
+    .no-open-drawings = No open drawings
+    .viewcube = ViewCube
+    .ucs-icon = UCS Icon
+    .file-tabs = File Tabs
+    .layout-tabs = Layout Tabs
+    .command-line = Command Line
+    .status-bar = Status Bar
+    .customize-qat = Customize Quick Access Toolbar
+    .more-commands = More Commands…
+    .more-commands-title = Add a Command to the Quick Access Toolbar
+    .find-command-to-add = Type a command to add
+    .show-below = Show Below the Ribbon
+    .show-above = Show Above the Ribbon
+    .qat-place-unavailable = Not available while the ribbon is closed
+    .qat-new = New
+    .qat-open = Open
+    .qat-save = Save
+    .qat-save-as = Save As
+    .qat-plot = Plot
+    .qat-undo = Undo
+    .qat-redo = Redo
+    .qat-measure = Measure
+    .qat-batch-plot = Batch Plot
+    .qat-match-properties = Match Properties
+    .qat-plot-preview = Plot Preview
+    .qat-properties = Properties
+    .add-to-qat = Add to Quick Access Toolbar
+    .remove-from-qat = Remove from Quick Access Toolbar
+    .add-separator = Add Separator
+    .remove-separator = Remove Separator
+    .qat-show-below = Show Quick Access Toolbar Below the Ribbon
+    .qat-show-above = Show Quick Access Toolbar Above the Ribbon
+    .return-to-ribbon = Return to Ribbon
+    .float-title-side = Panel title at the side, extra tools open to the right
+    .float-title-bottom = Panel title at the bottom, extra tools open downward
+    .floating-suffix = {" "}(floating)
 
 options =
     .language-section = Language
@@ -3537,6 +3583,9 @@ layers =
     .lock-and-fade = Lock and Fade
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: no layers were isolated by LAYISO.
     .laymatch-select-objects-to-change-layer = LAYMATCH  Select objects to change layer:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Select objects to copy:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Select an object on the destination layer:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  Select source object to match layer from:
@@ -3558,6 +3607,7 @@ layers =
     .layer-s-frozen = Layer(s) frozen.
     .layer-s-locked = Layer(s) locked.
     .layer-s-turned-off = Layer(s) turned off.
+    .layoff-select-object-on-layer-undo = LAYOFF  Select an object on the layer to be turned off or [Undo]:
     .layer-s-unlocked = Layer(s) unlocked.
     .layers = Layers: __ocs_fmt_0__
     .lock = Lock
@@ -3689,6 +3739,84 @@ layers =
     .prefix-style-style-name-not-found = __ocs_fmt_0__: style '__ocs_fmt_1__' not found.
 
 annotate =
+    .tcell-row-above =
+        Insert Row
+        Above
+    .tcell-row-below =
+        Insert Row
+        Below
+    .tcell-delete-rows =
+        Delete
+        Rows
+    .tcell-col-left =
+        Insert Column
+        Left
+    .tcell-col-right =
+        Insert Column
+        Right
+    .tcell-delete-cols =
+        Delete
+        Columns
+    .tcell-merge =
+        Merge
+        Cells
+    .tcell-unmerge =
+        Unmerge
+        Cells
+    .tcell-lock =
+        Cell
+        Locking
+    .tcell-edit =
+        Edit
+        Text
+    .tcell-match =
+        Match
+        Cell
+    .tcell-borders =
+        Cell
+        Borders
+    .tcell-format =
+        Data
+        Format
+    .tcell-block =
+        Insert
+        Block
+    .tcell-field =
+        Insert
+        Field
+    .tcell-contents =
+        Manage Cell
+        Contents
+    .tcell-link =
+        Link
+        Cell
+    .tcell-download =
+        Download
+        from Source
+    .tcell-row-style = Row style
+    .tcell-column-style = Column style
+    .tcell-width = Cell width
+    .tcell-height = Cell height
+    .tcell-border-color = Border color
+    .tcell-border-lineweight = Border lineweight
+    .tcell-border-linetype = Border linetype
+    .tcell-locking = Cell locking
+    .tcell-data-link = Cell data link
+    .tcell-select-destination = Select destination cell:
+    .tcell-select-cell = Select table cell:
+    .tcell-range-first = Select first corner of table cell range:
+    .tcell-range-second = Select second corner of table cell range:
+    .tcell-align-prompt = Enter cell alignment [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Enter data format [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Enter block name or [?]:
+    .tcell-formula-prompt = Enter a formula [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = By Row/Column
+    .tcell-unlocked = Unlocked
+    .tcell-content-locked = Content locked
+    .tcell-format-locked = Format locked
+    .tcell-content-format-locked = Content and format locked
+    .tcell-not-linked = Not linked
+    .tcell-invalid-cell = Invalid cell.
     .dimoverride-invalid-override = DIMOVERRIDE: invalid override "__ocs_fmt_0__".
     .dimoverride-no-dimensions = DIMOVERRIDE: no editable dimensions were selected.
     .dimoverride-updated = DIMOVERRIDE: updated __ocs_fmt_0__ dimension(s).
@@ -6529,9 +6657,57 @@ dimstyle =
     .move-text-outside-first = Move text outside first
     .period = Period
     .space = Space
+    .separator-none = (None)
     .surveyors-units = Surveyor's units
 
 style-manager =
+    .use-big-font = Use SHX Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = In this drawing
+    .stroke-fonts-shx = Stroke fonts (SHX)
+    .font-folders = Font folders
+    .truetype-fonts = TrueType fonts
+    .font-missing-drawn-with = missing · drawn with __ocs_fmt_0__
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = Use “__ocs_fmt_0__”
+    .face-regular = Regular
+    .face-bold-italic = Bold Italic
+    .font-style = Font style
+    .truetype-fonts-only = TrueType fonts only
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. 1 text that follows the style is updated.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. __ocs_fmt_3__ texts that follow the style are updated.
+    .style-update-in-blocks = Inside block definitions: __ocs_fmt_0__.
+    .style-update-keeps-one = 1 text with its own value keeps it.
+    .style-update-keeps-many = __ocs_fmt_0__ texts with their own value keep them.
+    .style-update-xref-undo = Texts in external references do not change. A single Undo reverts every change.
+    .rename-hint = Double-click a name to rename it.
+    .modified-was = Modified · was __ocs_fmt_0__
+    .height-asked-hint = 0 = the height is asked for when the text is placed.
+    .annotative-paper-hint = On: the height above is the paper height.
+    .backward-hint = Backward and Upside down affect single-line text and attributes, not MTEXT.
+    .on-apply = Apply will change
+    .sample-text = Sample text
+    .where-used = Texts using this style
+    .kind-single-line-text = Single-line text
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Attribute definitions
+    .no-texts-use-style = No texts use this style.
+    .inside-one-block = __ocs_fmt_0__ of them inside 1 block definition.
+    .inside-blocks = __ocs_fmt_0__ of them inside __ocs_fmt_1__ block definitions.
+    .used-by-one-text = used by 1 text
+    .used-by-texts = used by __ocs_fmt_0__ texts
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = Import Styles
     .select-drawing-to-import-styles-from = Select Drawing to Import Styles From
     .select-the-styles-to-import = Select the styles to import
@@ -6544,7 +6720,7 @@ style-manager =
     .always-left-align = Always left align
     .attachment-direction = Attachment direction
     .background-fill-enabled = Background fill enabled
-    .big-font = Big font
+    .big-font = Big Font file
     .block-scale-x = Block scale X
     .block-scale-y = Block scale Y
     .block-scale-z = Block scale Z
@@ -7818,6 +7994,52 @@ table-cmd =
     .lines = Line(s)
     .styles-in-use = Styles in use
 
+table-style-cells =
+    .tbl-start-from-style = Start from table style
+    .tbl-extra-columns = Additional columns
+    .tbl-extra-rows = Additional rows
+    .tbl-keep-from-template = Keep from the starting table:
+    .tbl-keep-label-text = Label cell text
+    .tbl-keep-data-text = Data cell text
+    .tbl-keep-overrides = Cell style overrides
+    .tbl-keep-links = Data links
+    .tbl-keep-fields = Fields
+    .tbl-keep-formulas = Formulas
+    .tbl-extra-whole = Additional rows and columns must be whole numbers.
+    .from-style-insertion = __ocs_arg_n__  Specify insertion point or [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Enter the name of a table style or [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Enter number of additional rows <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Enter number of additional columns <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Enter an insert option [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  Include __ocs_arg_what__ in inserted table? [Yes/No] <__ocs_arg_current__>:
+    .label-text = label text
+    .data-text = data text
+    .formulas = formulas
+    .fields = fields
+    .data-links = data links
+    .blocks = blocks
+    .cell-style-overrides = cell style overrides
+    .style-name-header = Table Style Name
+    .no-starting-table = Table style does not contain a table.
+    .select-table = Select a table:
+    .not-a-table = The object is not a table.
+    .cell-style-exists = A cell style with this name already exists.
+    .cell-style-in-use = The cell style is in use and cannot be deleted.
+    .template-size = __ocs_arg_rows__ rows × __ocs_arg_columns__ columns
+    .cell-properties = Cell Properties
+    .cell-text = Cell Text
+    .cell-borders = Cell Borders
+    .cell-styles = Cell styles
+    .label = Label
+    .margins = Margins
+    .merge-on-create = Merge cells on row/column creation
+    .new-from-this = New from this
+    .new-name = New name
+    .real-number = Real number
+    .whole-number = Whole number
+    .select-table-button = Select table…
+    .starting-table = Starting table
+    .table-direction = Table direction
 center-cmd =
     .mark-select = CENTERMARK  Select circle or arc to add center mark or [Layer]:
     .mark-invalid = Object selected is not a circle or arc.
@@ -8024,3 +8246,233 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Item count
+    .row-count = Row count
+    .row-and-column-count = Row and column count
+    .item-count = Item count
+    .angle-between-items = Angle between items
+    .prompt-columns = Specify number of columns (Ctrl: total column spacing):
+    .prompt-rows = Specify number of rows (Ctrl: total row spacing):
+    .prompt-rows-columns = Specify number of rows and columns:
+    .prompt-items = Specify number of items (Ctrl: fill angle or total spacing):
+    .prompt-column-spacing = Specify the distance between columns:
+    .prompt-row-spacing = Specify the distance between rows:
+    .prompt-item-spacing = Specify the distance between items:
+    .prompt-item-angle = Specify the angle between items:
+    .prompt-radius = Specify radius:
+table-cells =
+    .borders-title = Cell Borders
+    .contents-title = Cell Contents
+    .line = Line
+    .lineweight = Lineweight
+    .linetype = Linetype
+    .color = Color
+    .double = Double line
+    .spacing = Spacing
+    .apply-to = Apply to
+    .all = All
+    .outside = Outside
+    .inside = Inside
+    .none = None
+    .top = Top
+    .bottom = Bottom
+    .left = Left
+    .right = Right
+    .inside-horizontal = Inside horizontal
+    .inside-vertical = Inside vertical
+    .contents = Contents
+    .empty = The cell is empty.
+    .move-up = Move up
+    .move-down = Move down
+    .delete = Delete
+    .layout = Layout
+    .flow = Flow
+    .stack-horizontal = Stacked horizontally
+    .stack-vertical = Stacked vertically
+    .content-spacing = Spacing
+    .block-item = Block: { $name }
+    .text-item = Text: { $text }
+    .text-content = Table Cell Text
+    .borders-help = Sets the lineweight, linetype and color of the borders of the picked cells; choose the edges they go on.
+    .contents-help = Orders, removes and lays out the contents of the picked cell.
+    .block-title = Cell Block
+    .format-title = Cell Data Format
+    .block = Block
+    .block-name = Name
+    .browse = Browse...
+    .block-path = Path
+    .placement = Placement
+    .alignment = Cell alignment
+    .scale = Scale
+    .autofit = AutoFit
+    .rotation = Rotation angle
+    .format = Format
+    .current-precision = Current precision
+    .precision = Precision
+    .symbol = Symbol
+    .append-symbol = Append symbol
+    .negative-parens = Negatives in parentheses
+    .list-separator = List separator
+    .date-format = Date format
+    .no-format-settings = This data type has no format settings.
+    .data-type = Data type
+    .format-settings = Format
+    .currency = Currency
+    .decimal-number = Decimal Number
+    .percentage = Percentage
+    .whole-number = Whole Number
+    .grads = Grads
+    .sample-text = sample text
+    .block-help = Puts a block into the picked cells: where it sits, its scale (or fitted to the cell) and its rotation.
+    .format-help = Sets the data type and format the picked cells' values read with.
+    .additional-format = Additional format
+    .conversion = Conversion factor
+    .prefix = Prefix
+    .suffix = Suffix
+    .decimal-separator = Decimal separator
+    .thousands-separator = Thousands separator
+    .space = Space
+    .separator-none = (None)
+    .zero-leading = Leading zeros
+    .zero-trailing = Trailing zeros
+    .zero-feet = 0 feet
+    .zero-inches = 0 inches
+    .warning-title = Data Type Does Not Match
+    .warning-heading = These cells hold values that are not of the chosen data type.
+    .warning-note = Converting reads each value as the new type; a value that cannot be read as one is cleared. Cancel leaves the cells unchanged.
+    .warning-ok = Convert
+    .warning-cancel = Cancel
+block-chain =
+    .label = Chain actions
+    .cycle = The block action chain contains a cycle.
+
+block-action-bars =
+    .requires-session = BACTIONBAR requires an active Block Editor session.
+    .enable-display = Set BACTIONBARMODE to 1 to display action bars.
+    .parameters-changed = The parameter list changed; restart BACTIONBAR.
+    .display-updated = Action bar display updated.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Select a parameter, enter its name or [All] <Selected>:
+    .prompt-all = BACTIONBAR  Select a parameter, enter its name or [All] <All>:
+    .choose-mode = Choose Show, Hide or Reset.
+    .unique-parameter = Enter a unique parameter name, pick its endpoint, or choose All.
+    .enter-parameter = Enter a parameter name or choose All.
+    .pick-endpoint = Pick a parameter endpoint or choose All.
+
+block-construction =
+    .requires-session = BCONSTRUCTION is only available in the Block Editor.
+    .choose-operation = Choose Convert, Revert, Show or Hide.
+    .stale-session = The construction geometry's Block Editor session is no longer active.
+    .changed-count = __ocs_fmt_0__ geometry objects changed.
+    .prompt-selection = BCONSTRUCTION  Select geometry or [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  Choose [Convert/Revert] <Convert>, or press Enter to apply the selected operation:
+    .revert = Revert
+    .history = Edit construction geometry
+    .unsupported-record = This construction record has an unsupported version or value.
+    .open-definition = Open a block definition before editing construction geometry.
+    .missing-object = A selected construction object is no longer available.
+    .active-geometry = Select geometry in the active block definition.
+    .locked-layer = Construction geometry cannot be changed on a locked layer.
+    .revert-layer = Choose an existing unlocked layer for reverted geometry.
+
+block-authoring-history =
+    .alignment-type = Alignment type
+    .action-override = Edit block action override
+    .action-chain = Edit block action chain
+    .action-base = Edit block action base point
+    .parameter-chain = BEDIT Chain parameter actions
+    .value-set = BEDIT Parameter value set
+    .parameter-metadata = Edit block parameter metadata
+    .authoring-grip = Block authoring grip
+
+block-operation-history =
+    .reset-references = Reset block references
+    .associate-action = Associate block action
+    .action-selection = Action selection set
+    .test-parameter = Test block parameter
+    .reference-parameter = Block reference parameter
+    .align-reference = Align block reference
+    .insertion-grip-order = Change insertion grip order
+    .move-grip = Move native block grip
+    .configure-grips = Configure block parameter grips
+    .lookup-tables = Lookup tables
+    .hyperlink = Block hyperlink
+    .properties = Block properties
+    .properties-table = Block Properties Table
+    .visibility-state = Visibility state
+    .visibility-states = Visibility states
+
+block-formatted-history =
+    .action = { $label } action
+    .parameter = { $label } parameter
+    .edit-block = Edit block { $label }
+    .save-block = Save block as { $label }
+    .delete-block = Delete block { $label }
+
+block-history-kinds =
+    .flip = Flip
+    .polar-stretch = Polar Stretch
+    .basepoint = Basepoint
+    .lookup = Lookup
+
+block-action-properties =
+    .base-point = Action base point
+    .overrides = Action overrides
+    .multiplier = Distance multiplier
+    .angle-offset = Angle offset (degrees)
+    .chain = Action chain
+    .chain-to = Chain to
+
+block-parameter-properties =
+    .show-properties = Show in Properties
+    .parameter-name = Parameter name
+    .grip-count = Number of grips
+    .dependent-base = Dependent base point
+    .offset-x = Base offset X
+    .offset-y = Base offset Y
+    .base-grip = Base grip location
+    .end-grip = End grip location
+    .x-grip = X grip location
+    .y-grip = Y grip location
+
+block-value-set =
+    .use-min = Use { $label } minimum
+    .use-max = Use { $label } maximum
+    .use-increment = Use { $label } increment
+    .use-list = Use { $label } allowed-value list
+    .min = { $label } minimum
+    .max = { $label } maximum
+    .increment = { $label } increment
+    .values = { $label } allowed values
+    .title = Value Set
+    .x-distance = X Distance
+    .y-distance = Y Distance
+
+parameters-manager =
+    .action-parameters = Action Parameters
+    .filter = Name*
+    .search = Search for parameter
+    .order = Order
+    .polar = Polar
+    .visibility = Visibility
+    .variable = Variable
+    .footer = All: { $shown } of { $total } parameters displayed
+
+parameters-manager-feedback =
+    .no-number = This row has no number to edit.
+    .no-flag = This row has no visibility flag to change.
+    .finite-number = Specify a finite numeric parameter value.
+    .stale-session = The Block Editor session is no longer active.
+    .positive-length = Specify a positive parameter length.
+    .no-direction = The parameter direction is unavailable.
+    .history = Parameters Manager edit
+
+block-action-targets =
+    .prompt = BACTIONSET  Select objects or type Parameter followed by a Point name, then press Enter (Parameter "…"):
+    .create-prompt = BACTION  Select objects or type Parameter followed by a Point name, then press Enter (Parameter "…"):
+    .unique-point = Enter a unique Point parameter name.
+    .empty = An action needs at least one target.
+    .invalid = Select supported targets belonging to this block.
+    .stale = The action or its Block Editor session changed; restart BACTIONSET.
+    .create-stale = The action or its Block Editor session changed; restart BACTION.

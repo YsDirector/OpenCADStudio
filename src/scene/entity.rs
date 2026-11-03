@@ -399,6 +399,140 @@ impl Scene {
         handles
     }
 
+    /// Give a reference that arrived without attributes the ones its definition
+    /// declares. The routes that ask the operator for values build their own
+    /// list and keep it; an array copy or a scripted add commits the bare
+    /// reference, so the declaration is filled in here rather than by every
+    /// builder that could place one.
+    fn instantiate_attributes(document: &mut codec::Document, insert_handle: Handle) {
+        let Some(EntityType::Insert(insert)) = document.get_entity(insert_handle) else {
+            return;
+        };
+        if !insert.attributes.is_empty() {
+            return;
+        }
+        let name = insert.block_name.clone();
+        let attributes = Self::attributes_from_definitions(document, insert, |_| None);
+        if attributes.is_empty() {
+            return;
+        }
+        Self::sync_attribute_flag(document, &name);
+        let Some(EntityType::Insert(insert)) = document.get_entity_mut(insert_handle) else {
+            return;
+        };
+        insert.attributes = attributes;
+    }
+
+    /// The attributes `insert` gets from its block's definitions, placed by
+    /// the reference. `value` answers each definition; `None` keeps its
+    /// default value.
+    pub(crate) fn attributes_from_definitions(
+        document: &codec::Document,
+        insert: &codec::entities::Insert,
+        mut value: impl FnMut(&codec::entities::AttributeDefinition) -> Option<String>,
+    ) -> Vec<codec::entities::AttributeEntity> {
+        let name = &insert.block_name;
+        let base = crate::scene::render_graph::block_base_point(document, name);
+        let place = crate::scene::render_graph::insert_transform_with_base(insert, base);
+        document
+            .entities_in_block(name)
+            .filter_map(|entity| match entity {
+                EntityType::AttributeDefinition(definition) => {
+                    let mut attribute = codec::entities::AttributeEntity::from_definition(
+                        definition,
+                        value(definition),
+                    );
+                    codec::Entity::apply_transform(&mut attribute, &place);
+                    Some(attribute)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Give the attributes a reference arrives with their own identity. Whoever
+    /// builds a reference cannot know its handle yet, so the attributes are
+    /// adopted here: one already carrying a handle keeps it, one without gets a
+    /// fresh handle, the reference always becomes their owner, and the set is
+    /// terminated once there is something to terminate.
+    pub(crate) fn adopt_attributes(document: &mut codec::Document, insert_handle: Handle) {
+        Self::instantiate_attributes(document, insert_handle);
+        let Some(EntityType::Insert(insert)) = document.get_entity(insert_handle) else {
+            return;
+        };
+        let unhandled: Vec<bool> = insert
+            .attributes
+            .iter()
+            .map(|attribute| attribute.common.handle.is_null())
+            .collect();
+        let text_count = insert
+            .attributes
+            .iter()
+            .filter(|attribute| attribute.common.handle.is_null())
+            .filter_map(|attribute| attribute.embedded_mtext.as_ref())
+            .filter(|model| model.common.handle.is_null())
+            .count();
+        let needs_owner = insert
+            .attributes
+            .iter()
+            .any(|attribute| attribute.common.owner_handle != insert_handle);
+        let needs_end = !insert.attributes.is_empty() && insert.seqend_handle.is_none();
+        if unhandled.iter().all(|null| !*null) && !needs_owner && !needs_end {
+            return;
+        }
+        let handles: Vec<Handle> = (0..unhandled.iter().filter(|null| **null).count())
+            .map(|_| document.allocate_handle())
+            .collect();
+        let text_handles: Vec<Handle> = (0..text_count)
+            .map(|_| document.allocate_handle())
+            .collect();
+        let end = if needs_end {
+            Some(document.allocate_handle())
+        } else {
+            None
+        };
+        let Some(EntityType::Insert(insert)) = document.get_entity_mut(insert_handle) else {
+            return;
+        };
+        let mut handles = handles.into_iter();
+        let mut text_handles = text_handles.into_iter();
+        for (attribute, was_null) in insert.attributes.iter_mut().zip(&unhandled) {
+            if *was_null {
+                attribute.common.handle = handles.next().unwrap_or(Handle::NULL);
+                // A multiline attribute brings its text object along, and two
+                // objects cannot share one handle.
+                if let Some(model) = &mut attribute.embedded_mtext {
+                    if model.common.handle.is_null() {
+                        model.common.handle = text_handles.next().unwrap_or(Handle::NULL);
+                    }
+                    model.common.owner_handle = attribute.common.handle;
+                    model.common.raw_record = None;
+                    model.common.xdictionary_handle = None;
+                    model.common.reactors.clear();
+                }
+            }
+            attribute.common.owner_handle = insert_handle;
+        }
+        if let Some(end) = end {
+            insert.seqend_handle = Some(end);
+        }
+    }
+
+    /// Say on the record whether its own body declares attribute definitions.
+    /// A DXF file writes the definition's "has attribute definitions" marker
+    /// from the record flag alone, so the record has to state what its body
+    /// actually holds: read back from the body every time a body is written —
+    /// by the block editor, by a definition replace, by a pasted definition's
+    /// twin — rather than left to whichever command set it first.
+    pub(crate) fn sync_attribute_flag(document: &mut codec::Document, name: &str) {
+        let holds_definitions = document
+            .entities_in_block(name)
+            .any(|entity| matches!(entity, EntityType::AttributeDefinition(_)));
+        if let Some(record) = document.block_records.get_mut(name) {
+            record.flags.has_attributes = holds_definitions;
+        }
+    }
+
     fn add_entity_internal(&mut self, mut entity: EntityType, bump: bool) -> Handle {
         // An INSERT's ATTRIBs carry their own handles in a DWG/DXF file; one
         // built in-process (plugin `AddEntities`, paste) may leave them null,
@@ -506,7 +640,22 @@ impl Scene {
         //   - MSPACE or model layout: model space (document default).
         let handle = if let Some(br) = self.block_edit_block {
             entity.common_mut().owner_handle = br;
-            self.document.add_entity(entity).unwrap_or(Handle::NULL)
+            let authored_definition = matches!(&entity, EntityType::AttributeDefinition(_));
+            let handle = self.document.add_entity(entity).unwrap_or(Handle::NULL);
+            // The definition is attributed from the moment it holds one, not
+            // only once the editor saves: a file writes the marker for the
+            // definition from this flag.
+            if authored_definition && !handle.is_null() {
+                if let Some(record) = self
+                    .document
+                    .block_records
+                    .iter_mut()
+                    .find(|entry| entry.handle == br)
+                {
+                    record.flags.has_attributes = true;
+                }
+            }
+            handle
         } else if self.current_layout != "Model" && self.active_viewport.is_none() {
             let layout_name = self.current_layout.clone();
             self.document
@@ -517,6 +666,7 @@ impl Scene {
         };
 
         if !handle.is_null() {
+            Self::adopt_attributes(&mut self.document, handle);
             if let Some(keep) = self.refedit_keep.as_mut() {
                 keep.insert(handle);
             }
@@ -968,6 +1118,30 @@ impl Scene {
     }
 
     pub fn restore_solid_models(&mut self, handles: &[Handle]) {
+        /// The box around a body's surface, from a coarse tessellation.
+        fn body_box(body: &kernel::brep::Body) -> Option<([f64; 3], [f64; 3])> {
+            let tolerance = kernel::brep::mesh::TessellationTolerance::new(0.5, 1e-3);
+            let mesh = kernel::brep::mesh::tessellate(body, tolerance).mesh;
+            let mut points = mesh.positions.iter().copied();
+            let first = points.next()?;
+            Some(points.fold((first, first), |(lo, hi), p| {
+                (
+                    [lo[0].min(p[0]), lo[1].min(p[1]), lo[2].min(p[2])],
+                    [hi[0].max(p[0]), hi[1].max(p[1]), hi[2].max(p[2])],
+                )
+            }))
+        }
+        /// Whether two bodies fill the same box, to a hundredth of its size
+        /// (the coarse tessellation cuts curved sides differently).
+        fn same_place(a: &kernel::brep::Body, b: &kernel::brep::Body) -> bool {
+            let (Some((alo, ahi)), Some((blo, bhi))) = (body_box(a), body_box(b)) else {
+                return true;
+            };
+            let size = (0..3).map(|k| ahi[k] - alo[k]).fold(0.0_f64, f64::max);
+            let slack = size * 1e-2 + 1e-9;
+            (0..3).all(|k| (alo[k] - blo[k]).abs() <= slack && (ahi[k] - bhi[k]).abs() <= slack)
+        }
+
         let bodies: Vec<(Handle, kernel::brep::Body)> = handles
             .iter()
             .filter(|handle| !self.solid_models.contains_key(handle))
@@ -994,7 +1168,15 @@ impl Scene {
                 let body = if tree.as_ref().is_some_and(|tree| tree.has_boolean()) {
                     stored().or_else(rebuilt)
                 } else {
-                    rebuilt().or_else(stored)
+                    match (rebuilt(), stored()) {
+                        // A history that no longer matches the saved body
+                        // (moved by a path that left it behind) would cut or
+                        // join the solid where it is not drawn.
+                        (Some(rebuilt), Some(stored)) if !same_place(&rebuilt, &stored) => {
+                            Some(stored)
+                        }
+                        (rebuilt, stored) => rebuilt.or(stored),
+                    }
                 }?;
                 Some((handle, body))
             })
@@ -1122,11 +1304,14 @@ impl Scene {
         [r, g, b, alpha]
     }
 
+    /// The definitions an operator can place by name. Generated records
+    /// (`*U`, `*D`, …) are not definitions anybody authored, so listing them
+    /// would advertise a block nobody made.
     pub fn custom_block_names(&self) -> Vec<String> {
         self.document
             .block_records
             .iter()
-            .filter(|br| !br.is_standard() && !br.is_layout())
+            .filter(|br| !br.is_standard() && !br.is_layout() && !br.is_anonymous())
             .map(|br| br.name.clone())
             .collect()
     }
@@ -1293,6 +1478,22 @@ impl Scene {
 
         self.close_block_definition(name, br_handle, stale_end)?;
 
+        // The record advertises an attributed block whenever its body holds
+        // attribute definitions, and those definitions are what the reference
+        // below is built from.
+        let definitions: Vec<codec::entities::AttributeDefinition> = {
+            let cloned: Vec<codec::entities::AttributeDefinition> = self
+                .document
+                .entities_in_block(name)
+                .filter_map(|entity| match entity {
+                    EntityType::AttributeDefinition(definition) => Some(definition.clone()),
+                    _ => None,
+                })
+                .collect();
+            Self::sync_attribute_flag(&mut self.document, name);
+            cloned
+        };
+
         let mut insert_handle = Handle::NULL;
         // An empty definition has nothing to convert into a reference.
         if options.mode == crate::ui::window::block_definition::BlockObjectMode::Convert
@@ -1300,6 +1501,17 @@ impl Scene {
         {
             let mut insert = DxfInsert::new(name, codec::types::Vector3::ZERO);
             codec::Entity::apply_transform(&mut insert, &options.block_to_world);
+            // Each definition contributes a reference of its own, seeded from
+            // its default and placed where the definition draws it, so the
+            // converted objects read as the attributed block they became.
+            let base = crate::scene::render_graph::block_base_point(&self.document, name);
+            let place = crate::scene::render_graph::insert_transform_with_base(&insert, base);
+            for definition in &definitions {
+                let mut attribute =
+                    codec::entities::AttributeEntity::from_definition(definition, None);
+                codec::Entity::apply_transform(&mut attribute, &place);
+                insert.attributes.push(attribute);
+            }
             insert_handle = self.add_entity(EntityType::Insert(insert));
         }
 
@@ -1757,6 +1969,7 @@ impl Scene {
         if let Some(record) = self.document.block_records.get_mut(name) {
             record.block_end_handle = end_handle;
         }
+        Self::sync_attribute_flag(&mut self.document, name);
         // Solids, surfaces and meshes of a definition draw through their
         // instanced block meshes, which only a tessellation pass creates.
         self.refresh_meshes_for_handles(&entity_handles);
@@ -1813,6 +2026,7 @@ impl Scene {
         if let Some(record) = self.document.block_records.get_mut(name) {
             record.block_end_handle = end_handle;
         }
+        Self::sync_attribute_flag(&mut self.document, name);
         self.refresh_meshes_for_handles(&added);
         self.bump_geometry();
     }
@@ -1886,6 +2100,7 @@ impl Scene {
             changed.extend(self.document.add_entity(entity).ok());
         }
         self.close_block_definition(name, br_handle, stale_end)?;
+        Self::sync_attribute_flag(&mut self.document, name);
         self.refresh_meshes_for_handles(&changed);
         self.bump_geometry();
         Ok(())
@@ -3453,6 +3668,9 @@ impl Scene {
                 })
             })
             .collect();
+        // An incremental pass that found nothing new changed no mesh, so it
+        // must not force a whole-drawing rebuild (every paste runs one).
+        let changed = !incremental || !built.is_empty();
         for (handle, mut m, top_level) in built {
             if top_level {
                 self.meshes.insert(handle, m);
@@ -3462,7 +3680,7 @@ impl Scene {
             }
         }
 
-        if bump {
+        if bump && changed {
             self.bump_geometry();
         }
     }
@@ -4157,6 +4375,322 @@ mod image_definition_graph_tests {
                 usize::from(undo)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod attribute_instantiation_tests {
+    use super::*;
+    use codec::entities::{AttributeDefinition, AttributeEntity, Insert};
+
+    fn definition(tag: &str, value: &str, at: codec::types::Vector3) -> AttributeDefinition {
+        let mut definition =
+            AttributeDefinition::new(tag.to_string(), format!("{tag}:"), value.to_string());
+        definition.insertion_point = at;
+        definition.height = 1.0;
+        definition
+    }
+
+    fn insert(scene: &Scene, handle: Handle) -> Insert {
+        let Some(EntityType::Insert(insert)) = scene.document.get_entity(handle) else {
+            panic!("expected the inserted reference {handle:?}");
+        };
+        insert.clone()
+    }
+
+    /// A reference placed without attributes of its own still has to show the
+    /// ones its definition declares: an array copy and a scripted add both
+    /// commit the bare reference, and the attributes belong to it.
+    #[test]
+    fn a_reference_placed_without_attributes_takes_them_from_its_definition() {
+        let mut scene = Scene::new();
+        scene.define_block_raw(
+            "ATTRIB_PLAIN",
+            codec::types::Vector3::ZERO,
+            vec![EntityType::AttributeDefinition(definition(
+                "WIDTH",
+                "100",
+                codec::types::Vector3::new(2.0, 3.0, 0.0),
+            ))],
+        );
+
+        let handle = scene.add_entity(EntityType::Insert(Insert::new(
+            "ATTRIB_PLAIN".to_string(),
+            codec::types::Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let insert = insert(&scene, handle);
+        assert_eq!(
+            insert.attributes.len(),
+            1,
+            "the reference carries the attribute its definition declares"
+        );
+        let attribute = &insert.attributes[0];
+        assert_eq!(attribute.tag, "WIDTH");
+        assert_eq!(attribute.value, "100");
+        assert_eq!(
+            attribute.insertion_point,
+            codec::types::Vector3::new(12.0, 3.0, 0.0),
+            "the definition's place travels with the reference"
+        );
+        assert!(!attribute.common.handle.is_null());
+        assert_eq!(attribute.common.owner_handle, handle);
+        assert!(
+            insert.seqend_handle.is_some(),
+            "the attributes need a terminator"
+        );
+        assert_eq!(
+            scene
+                .document
+                .block_records
+                .get("ATTRIB_PLAIN")
+                .map(|record| record.flags.has_attributes),
+            Some(true),
+            "the definition is marked attributed"
+        );
+    }
+
+    /// A constant attribute belongs to the definition it is painted from, but
+    /// it is still part of the reference: a preset or constant value has to
+    /// exist on the instance so that saving the drawing writes it back.
+    #[test]
+    fn the_fill_carries_every_declared_attribute_in_definition_order() {
+        let mut scene = Scene::new();
+        let mut constant = definition("CONST", "fixed", codec::types::Vector3::new(0.0, 5.0, 0.0));
+        constant.flags.constant = true;
+        scene.define_block_raw(
+            "ATTRIB_MIXED",
+            codec::types::Vector3::ZERO,
+            vec![
+                EntityType::AttributeDefinition(definition(
+                    "WIDTH",
+                    "100",
+                    codec::types::Vector3::new(2.0, 3.0, 0.0),
+                )),
+                EntityType::AttributeDefinition(constant),
+            ],
+        );
+
+        let handle = scene.add_entity(EntityType::Insert(Insert::new(
+            "ATTRIB_MIXED".to_string(),
+            codec::types::Vector3::new(10.0, 0.0, 0.0),
+        )));
+        let tags: Vec<String> = insert(&scene, handle)
+            .attributes
+            .iter()
+            .map(|attribute| attribute.tag.clone())
+            .collect();
+        assert_eq!(tags, vec!["WIDTH".to_string(), "CONST".to_string()]);
+        let handles: Vec<Handle> = insert(&scene, handle)
+            .attributes
+            .iter()
+            .map(|attribute| attribute.common.handle)
+            .collect();
+        assert!(
+            handles.iter().all(|h| !h.is_null()),
+            "each carried attribute is its own object"
+        );
+        assert_ne!(handles[0], handles[1], "each attribute is its own");
+        assert_ne!(handles[0], handle, "not the reference's own handle");
+    }
+
+    /// The fill is a fallback for a bare reference. A route that asked the
+    /// operator for values commits a filled list, and that list is the
+    /// answer — replacing it would lose what was typed.
+    #[test]
+    fn a_reference_that_arrives_with_attributes_keeps_them() {
+        let mut scene = Scene::new();
+        scene.define_block_raw(
+            "ATTRIB_ASKED",
+            codec::types::Vector3::ZERO,
+            vec![EntityType::AttributeDefinition(definition(
+                "WIDTH",
+                "100",
+                codec::types::Vector3::new(2.0, 3.0, 0.0),
+            ))],
+        );
+        let mut answer = AttributeEntity::from_definition(
+            &definition("WIDTH", "100", codec::types::Vector3::new(2.0, 3.0, 0.0)),
+            Some("250".to_string()),
+        );
+        answer.common.handle = Handle::new(0x1234);
+        answer.insertion_point = codec::types::Vector3::new(12.0, 3.0, 0.0);
+        let mut bare = Insert::new(
+            "ATTRIB_ASKED".to_string(),
+            codec::types::Vector3::new(10.0, 0.0, 0.0),
+        );
+        bare.attributes = vec![answer];
+
+        let handle = scene.add_entity(EntityType::Insert(bare));
+        let insert = insert(&scene, handle);
+        assert_eq!(insert.attributes.len(), 1, "nothing was invented");
+        assert_eq!(insert.attributes[0].value, "250");
+        assert_eq!(
+            insert.attributes[0].common.handle,
+            Handle::new(0x1234),
+            "the placed attribute keeps its identity"
+        );
+    }
+
+    /// A definition with nothing to declare must not gain an attribute list or
+    /// a terminator, so the fill cannot invent records for every insert.
+    #[test]
+    fn a_reference_of_a_plain_definition_stays_without_attributes() {
+        let mut scene = Scene::new();
+        scene.define_block_raw(
+            "PLAIN_ONLY",
+            codec::types::Vector3::ZERO,
+            vec![EntityType::Line(codec::entities::Line::from_points(
+                codec::types::Vector3::ZERO,
+                codec::types::Vector3::new(4.0, 0.0, 0.0),
+            ))],
+        );
+        let handle = scene.add_entity(EntityType::Insert(Insert::new(
+            "PLAIN_ONLY".to_string(),
+            codec::types::Vector3::new(20.0, 0.0, 0.0),
+        )));
+        let insert = insert(&scene, handle);
+        assert!(insert.attributes.is_empty());
+        assert!(insert.seqend_handle.is_none());
+    }
+
+    /// A definition is attributed because of what its body holds, not because
+    /// a reference of it was placed. Writing the body out — from the editor,
+    /// from a paste, or from a file — has to say so on the record, and a body
+    /// that no longer holds a definition has to unsay it.
+    #[test]
+    fn a_written_definition_is_attributed_because_of_its_body() {
+        let mut scene = Scene::new();
+        scene.define_block_raw(
+            "WRITTEN",
+            codec::types::Vector3::ZERO,
+            vec![EntityType::AttributeDefinition(definition(
+                "TAG",
+                "value",
+                codec::types::Vector3::ZERO,
+            ))],
+        );
+        assert_eq!(
+            scene
+                .document
+                .block_records
+                .get("WRITTEN")
+                .map(|record| record.flags.has_attributes),
+            Some(true),
+            "a body that declares an attribute marks the record"
+        );
+        scene
+            .redefine_block_raw(
+                "WRITTEN",
+                codec::types::Vector3::ZERO,
+                vec![EntityType::Line(codec::entities::Line::from_points(
+                    codec::types::Vector3::ZERO,
+                    codec::types::Vector3::new(4.0, 0.0, 0.0),
+                ))],
+            )
+            .unwrap();
+        assert_eq!(
+            scene
+                .document
+                .block_records
+                .get("WRITTEN")
+                .map(|record| record.flags.has_attributes),
+            Some(false),
+            "a body without one leaves the record unmarked"
+        );
+    }
+}
+
+#[cfg(test)]
+mod attribute_identity_tests {
+    use super::*;
+    use codec::entities::{AttributeDefinition, AttributeEntity, Insert, MText};
+
+    fn attributed_scene() -> (Scene, Handle) {
+        let mut scene = Scene::new();
+        let mut definition =
+            AttributeDefinition::new("WIDTH".to_string(), "Width:".to_string(), "100".to_string());
+        definition.insertion_point = codec::types::Vector3::new(2.0, 3.0, 0.0);
+        definition.height = 1.0;
+        scene.define_block_raw(
+            "ATTRIB_ID",
+            codec::types::Vector3::ZERO,
+            vec![EntityType::AttributeDefinition(definition)],
+        );
+        let source = scene.add_entity(EntityType::Insert(Insert::new(
+            "ATTRIB_ID".to_string(),
+            codec::types::Vector3::ZERO,
+        )));
+        (scene, source)
+    }
+
+    fn copied(scene: &mut Scene, source: Handle) -> Handle {
+        scene.begin_undo_recording();
+        let copies = scene.copy_entities(
+            &[source],
+            &crate::command::EntityTransform::Translate(glam::DVec3::new(20.0, 0.0, 0.0)),
+        );
+        assert_eq!(copies.len(), 1);
+        copies[0]
+    }
+
+    fn attributes(scene: &Scene, handle: Handle) -> Vec<AttributeEntity> {
+        let Some(EntityType::Insert(insert)) = scene.document.get_entity(handle) else {
+            panic!("expected the reference {handle:?}");
+        };
+        insert.attributes.clone()
+    }
+
+    /// The reference is the owner of its attribute children, so a copy that
+    /// still names its source as owner writes two children under one owner.
+    #[test]
+    fn a_copied_reference_owns_its_attribute_children() {
+        let (mut scene, source) = attributed_scene();
+        let copy = copied(&mut scene, source);
+        let children = attributes(&scene, copy);
+        assert_eq!(children.len(), 1);
+        assert_ne!(
+            children[0].common.handle,
+            attributes(&scene, source)[0].common.handle
+        );
+        assert_eq!(
+            children[0].common.owner_handle, copy,
+            "the copy owns the attribute it was cloned with"
+        );
+    }
+
+    /// A multiline attribute carries its text object inside the reference. The
+    /// clone deep-copies it, so the text has to come out with a handle of its
+    /// own and the attribute as its owner — two objects cannot share one handle.
+    #[test]
+    fn a_copied_reference_rehandles_its_embedded_text() {
+        let (mut scene, source) = attributed_scene();
+        let mut text = MText::new();
+        text.value = "100".to_string();
+        text.common.handle = scene.document.allocate_handle();
+        let Some(EntityType::Insert(insert)) = scene.document.get_entity_mut(source) else {
+            panic!("expected the source reference");
+        };
+        insert.attributes[0].embedded_mtext = Some(Box::new(text));
+        let copy = copied(&mut scene, source);
+        let source_text = attributes(&scene, source)[0]
+            .embedded_mtext
+            .as_ref()
+            .expect("source text")
+            .common
+            .handle;
+        let child = &attributes(&scene, copy)[0];
+        let copy_text = child
+            .embedded_mtext
+            .as_ref()
+            .expect("the copy keeps its text");
+        assert_ne!(
+            copy_text.common.handle, source_text,
+            "the copy's text is a separate object"
+        );
+        assert_eq!(
+            copy_text.common.owner_handle, child.common.handle,
+            "and its attribute owns it"
+        );
     }
 }
 

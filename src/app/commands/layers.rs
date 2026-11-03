@@ -20,6 +20,31 @@ fn restore_layiso_layer(
 }
 
 impl OpenCADStudio {
+    /// A command turned one layer off (or back on): one undo step, and the
+    /// command stays for its next pick.
+    pub(in crate::app) fn set_layer_on_from_command(&mut self, i: usize, layer: &str, on: bool) {
+        let names = vec![layer.to_string()];
+        let undo = self.begin_layer_undo(i, "LAYOFF", &names);
+        if let Some(record) = self.tabs[i].scene.document.layers.get_mut(layer) {
+            if on {
+                record.turn_on();
+            } else {
+                record.turn_off();
+            }
+        }
+        self.tabs[i].scene.invalidate_layer_visibility(&names);
+        self.tabs[i].dirty = true;
+        self.commit_layer_undo(i, undo);
+        self.refresh_layer_panel();
+        if !on {
+            self.command_line
+                .push_info(crate::t!("Layer(s) turned off.").as_ref());
+        }
+        if let Some(prompt) = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt()) {
+            self.command_line.push_info(&prompt);
+        }
+    }
+
     pub(super) fn dispatch_layers(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             cmd if cmd.starts_with("GRAPHICATTRIBUTELAYER ") => {
@@ -35,8 +60,7 @@ impl OpenCADStudio {
                     .map(|(h, _)| h)
                     .collect();
                 if handles.is_empty() {
-                    use crate::modules::draw::select::SelectObjectsCommand;
-                    let cmd = SelectObjectsCommand::new("LAYOFF");
+                    let cmd = crate::modules::draw::layers::layoff::LayerOffCommand::default();
                     self.command_line.push_info(&cmd.prompt());
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
@@ -887,7 +911,12 @@ impl OpenCADStudio {
                 };
                 // Consume the preselection so it cannot become a destination.
                 self.tabs[i].scene.deselect_all();
-                let cmd = MatchPropCommand::new(src);
+                let last = self.tabs[i].last_matchprop_src;
+                let last = match self.tabs[i].scene.document.get_entity(last) {
+                    Some(_) => last,
+                    None => codec::Handle::NULL,
+                };
+                let cmd = MatchPropCommand::new(src).with_last(last);
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
                 self.refresh_active_cmd_preview(i);

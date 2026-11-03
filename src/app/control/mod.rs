@@ -1098,6 +1098,17 @@ impl OpenCADStudio {
             return (response, Task::none());
         }
         let client = req["client_id"].as_str().unwrap_or("default").to_owned();
+        // The attribute form an attributed insertion raises is modal, and the
+        // command it parked waits for those answers, so they reach it through
+        // the action surface while that command is still the active one. The
+        // form covers the whole app, so any client may answer it, as any client
+        // may answer the dialogs the same guard has always let through.
+        let answers_attribute_form = op == "action"
+            && self.active_modal == Some(crate::app::ModalKind::InsertAttributes)
+            && matches!(
+                req["name"].as_str(),
+                Some("dialog_answer") | Some("dialog_ok") | Some("dialog_cancel") | Some("close_modal")
+            );
         if tab.active_cmd.is_some()
             && (self.control.owner.as_ref() != Some(&(tab.id, client.clone()))
                 || matches!(
@@ -1105,11 +1116,20 @@ impl OpenCADStudio {
                     "run" | "start" | "new" | "open" | "activate" | "switch_document"
                 ))
             && op != "cancel"
+            && !answers_attribute_form
         {
-            return (
-                failure("command_busy", "An interactive command is already active"),
-                Task::none(),
-            );
+            // Say who holds the command: the client that started it, or the
+            // user (no client) when it was started or taken over in the window.
+            let mut busy = failure("command_busy", "An interactive command is already active");
+            busy["command"] = json!(tab.active_cmd.as_ref().map(|command| command.name()));
+            busy["document_id"] = json!(tab.id);
+            busy["owner_client_id"] = json!(self
+                .control
+                .owner
+                .as_ref()
+                .filter(|(owner_tab, _)| *owner_tab == tab.id)
+                .map(|(_, owner)| owner.clone()));
+            return (busy, Task::none());
         }
         if matches!(op, "run" | "start" | "input") && tab.is_start {
             return (
@@ -1737,6 +1757,14 @@ impl OpenCADStudio {
         }
         self.control_settle();
     }
+    /// Whether a control client drives the command running in tab `i`.
+    pub(in crate::app) fn control_owns_command(&self, i: usize) -> bool {
+        self.control
+            .owner
+            .as_ref()
+            .is_some_and(|(tab, _)| self.tabs.get(i).is_some_and(|t| t.id == *tab))
+    }
+
     pub(super) fn control_observe_user_message(&mut self, message: &Message) {
         if self.control.routing || self.control.owner.is_none() {
             return;
@@ -2146,18 +2174,9 @@ impl OpenCADStudio {
             let Some(window) = self.main_window else {
                 return Task::done(Message::ControlScreenshot(path, None));
             };
-            // A minimized window has a 0x0 surface and the renderer panics
-            // reading it back, so report instead of capturing.
-            iced::window::size(window).then(move |size| {
-                let path = path.clone();
-                if size.width <= 0.0 || size.height <= 0.0 {
-                    Task::done(Message::ControlScreenshot(path, None))
-                } else {
-                    iced::window::screenshot(window).map(move |screenshot| {
-                        Message::ControlScreenshot(path.clone(), Some(screenshot))
-                    })
-                }
-            })
+            // A minimized window reports a failed capture instead.
+            crate::app::screenshot_if_drawn(window)
+                .map(move |screenshot| Message::ControlScreenshot(path.clone(), screenshot))
         }
     }
 }
@@ -3541,6 +3560,24 @@ mod tests {
             app.tabs[app.active_tab].active_cmd.is_none(),
             "a failed symmetric pick cancels the command instead of leaving it waiting: {symmetric}"
         );
+
+        // A pair those two aliases cannot constrain at all: one line and one
+        // point. The count is right, the objects are not.
+        for cmd in ["QCONSTRAINT", "TCONSTRAINT"] {
+            request(
+                &mut app,
+                json!({"op":"select","handles":[&point, &lines[0]]}),
+            );
+            let refused = request(&mut app, json!({"op":"run","cmd":cmd}));
+            assert_eq!(
+                refused["ok"], false,
+                "{cmd} must refuse a pair it cannot constrain: {refused}"
+            );
+            assert!(
+                app.tabs[app.active_tab].active_cmd.is_none(),
+                "a failed {cmd} pick leaves no command waiting for another pick: {refused}"
+            );
+        }
     }
 
     /// `DCFORM` converts the selected dimensional constraint and the record
@@ -3683,6 +3720,261 @@ mod tests {
             "DCFORM must refuse a selection with no dimensional constraint: {refused}"
         );
         assert!(app.tabs[app.active_tab].active_cmd.is_none());
+    }
+
+    /// A value other than the measured one is not just recorded: the same
+    /// command that creates the constraint moves the geometry it drives.
+    #[test]
+    fn a_typed_constraint_value_moves_the_geometry_it_drives() {
+        use crate::command::CmdResult;
+        use crate::scene::parametric_constraints::{
+            ConstraintKind, ParametricRef, ParametricScope,
+        };
+
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 0,0 40,0"}));
+        let lines = request(&mut app, json!({"op":"query","type":"Line"}))["entities"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let line = codec::Handle::new(
+            u64::from_str_radix(lines[0]["handle"].as_str().unwrap(), 16).unwrap(),
+        );
+        let task = app.apply_cmd_result(CmdResult::AddDimensionalConstraint {
+            kind: ConstraintKind::DistanceX,
+            first: ParametricRef::point(line, 0),
+            second: ParametricRef::point(line, 1),
+            first_point: glam::DVec3::ZERO,
+            second_point: glam::DVec3::new(40.0, 0.0, 0.0),
+            location: glam::DVec3::new(20.0, -10.0, 0.0),
+            axis: glam::DVec3::X,
+            direction: None,
+            name: "d1".to_string(),
+            expression: "100".to_string(),
+            renamed: false,
+            label: "Linear constraint",
+        });
+        app.drive_headless_task(task).unwrap();
+
+        let document = &app.tabs[app.active_tab].scene.document;
+        let codec::EntityType::Line(line_entity) = document.get_entity(line).unwrap() else {
+            panic!("the picked entity is the line");
+        };
+        assert!(
+            app.tabs[app.active_tab]
+                .scene
+                .parametric_constraint_set(ParametricScope::ModelSpace)
+                .is_some_and(|set| !set.dimensions.is_empty()),
+            "the constraint and its dimension were created"
+        );
+        assert!(
+            line_entity.start.x.abs() < 1e-6,
+            "the first point stays anchored: {}",
+            line_entity.start.x
+        );
+        assert!(
+            (line_entity.end.x - 100.0).abs() < 1e-6,
+            "the typed 100 replaces the measured 40 across X: {}",
+            line_entity.end.x
+        );
+        let dimension = app.tabs[app.active_tab]
+            .scene
+            .parametric_constraint_set(ParametricScope::ModelSpace)
+            .and_then(|set| set.dimensions.values().next().copied())
+            .expect("the constraint drives a dimension");
+        let codec::EntityType::Dimension(printed) = app.tabs[app.active_tab]
+            .scene
+            .document
+            .get_entity(dimension)
+            .unwrap()
+        else {
+            panic!("the constraint's dimension is a dimension");
+        };
+        assert_eq!(
+            printed.base().user_text.as_deref(),
+            Some("d1=100"),
+            "the label carries the typed value, not the span that was drawn"
+        );
+    }
+
+    /// A dynamic dimension is placed automatically: its label point is the
+    /// zero sentinel and the dimension line's definition point holds where it
+    /// was drawn. Both survive a save, so the label re-places the same way.
+    #[test]
+    fn a_dynamic_dimensions_placement_survives_a_save() {
+        use crate::command::CmdResult;
+        use crate::scene::parametric_constraints::{
+            ConstraintKind, ParametricRef, ParametricScope,
+        };
+
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 700,200 700,240"}));
+        let drawn = request(&mut app, json!({"op":"query","type":"Line"}))["entities"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let line = codec::Handle::new(
+            u64::from_str_radix(drawn[0]["handle"].as_str().unwrap(), 16).unwrap(),
+        );
+        let task = app.apply_cmd_result(CmdResult::AddDimensionalConstraint {
+            kind: ConstraintKind::DistanceY,
+            first: ParametricRef::point(line, 0),
+            second: ParametricRef::point(line, 1),
+            first_point: glam::DVec3::new(700.0, 200.0, 0.0),
+            second_point: glam::DVec3::new(700.0, 240.0, 0.0),
+            location: glam::DVec3::new(740.0, 220.0, 0.0),
+            axis: glam::DVec3::Y,
+            direction: None,
+            name: "d1".to_string(),
+            expression: "40".to_string(),
+            renamed: false,
+            label: "Vertical distance constraint",
+        });
+        app.drive_headless_task(task).unwrap();
+
+        let dimension = app.tabs[app.active_tab]
+            .scene
+            .parametric_constraint_set(ParametricScope::ModelSpace)
+            .and_then(|set| set.dimensions.values().next().copied())
+            .expect("the constraint drives a dimension");
+        let placement = |document: &codec::Document| {
+            let codec::EntityType::Dimension(printed) =
+                document.get_entity(dimension).expect("the dimension is in the document")
+            else {
+                panic!("the constraint's dimension is a dimension");
+            };
+            (
+                printed.base().definition_point,
+                printed.base().text_middle_point,
+                printed.base().text_user_positioned,
+            )
+        };
+        let (definition, text, positioned) = placement(&app.tabs[app.active_tab].scene.document);
+        assert!(
+            (definition.x - 740.0).abs() < 1e-6,
+            "the dimension line keeps the side the label was given on: {definition:?}"
+        );
+        assert!(
+            text == codec::types::Vector3::ZERO && !positioned,
+            "a dynamic label is placed automatically, not pinned: {text:?}"
+        );
+        let bytes = codec::DxfWriter::new(&app.tabs[app.active_tab].scene.document)
+            .write_to_vec()
+            .unwrap();
+        let reopened = codec::DxfReader::from_reader(std::io::Cursor::new(bytes))
+            .unwrap()
+            .read()
+            .unwrap();
+        let (saved_definition, saved_text, saved_positioned) = placement(&reopened);
+        assert!(
+            (saved_definition - definition).length() < 1e-6,
+            "the dimension line holds its place through the save: {definition:?} -> {saved_definition:?}"
+        );
+        assert!(
+            saved_text == text && saved_positioned == positioned,
+            "the label is still auto-placed after the save"
+        );
+    }
+
+    /// Editing the value afterwards drives the same geometry: the participant
+    /// the constraint holds moves to the new value in the edit's own command.
+    #[test]
+    fn editing_a_constraint_value_moves_the_geometry_it_drives() {
+        use crate::command::CmdResult;
+        use crate::scene::parametric_constraints::{ConstraintKind, ParametricRef};
+
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 0,0 40,0"}));
+        let drawn = request(&mut app, json!({"op":"query","type":"Line"}))["entities"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let line = codec::Handle::new(
+            u64::from_str_radix(drawn[0]["handle"].as_str().unwrap(), 16).unwrap(),
+        );
+        let task = app.apply_cmd_result(CmdResult::AddDimensionalConstraint {
+            kind: ConstraintKind::DistanceX,
+            first: ParametricRef::point(line, 0),
+            second: ParametricRef::point(line, 1),
+            first_point: glam::DVec3::ZERO,
+            second_point: glam::DVec3::new(40.0, 0.0, 0.0),
+            location: glam::DVec3::new(20.0, -10.0, 0.0),
+            axis: glam::DVec3::X,
+            direction: None,
+            name: "d1".to_string(),
+            expression: "40".to_string(),
+            renamed: false,
+            label: "Linear constraint",
+        });
+        app.drive_headless_task(task).unwrap();
+        let end_x = |app: &OpenCADStudio| {
+            let document = &app.tabs[app.active_tab].scene.document;
+            let codec::EntityType::Line(line_entity) = document.get_entity(line).unwrap() else {
+                panic!("the picked entity is the line");
+            };
+            line_entity.end.x
+        };
+        assert!(
+            (end_x(&app) - 40.0).abs() < 1e-6,
+            "the measured value leaves the line where it was drawn: {}",
+            end_x(&app)
+        );
+
+        let edit = request(&mut app, json!({"op":"run","cmd":"DCVALUE d1 100"}));
+        assert_eq!(edit["ok"], json!(true), "the value edit ran: {edit}");
+        assert!(
+            (end_x(&app) - 100.0).abs() < 1e-6,
+            "DCVALUE to 100 moved the constrained line: {}",
+            end_x(&app)
+        );
+    }
+
+    /// Every type the umbrella offers resolves as a command of its own, so
+    /// the option list is not the only way to reach any of them.
+    #[test]
+    fn every_umbrella_type_answers_to_its_own_command_name() {
+        let mut app = OpenCADStudio::new_for_test();
+        request(&mut app, json!({"op":"new"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 0,0 10,0"}));
+        request(&mut app, json!({"op":"run","cmd":"LINE 0,5 10,5"}));
+        let umbrella = request(&mut app, json!({"op":"run","cmd":"GEOMCONSTRAINT"}));
+        let prompt = umbrella["state"]["command"]["prompt"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let types: Vec<String> = prompt
+            .match_indices('[')
+            .next()
+            .map(|(start, _)| {
+                prompt[start + 1..]
+                    .split(']')
+                    .next()
+                    .unwrap_or("")
+                    .split('/')
+                    .map(|token| token.trim().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        assert!(types.len() >= 12, "the umbrella lists its types: {prompt}");
+        request(&mut app, json!({"op":"cancel"}));
+        for token in &types {
+            let name = format!("GC{}", token.to_uppercase());
+            let opened = request(&mut app, json!({"op":"run","cmd": &name}));
+            assert!(
+                opened["ok"] == json!(true),
+                "{name} does not reach the constraint it is named for: {opened}"
+            );
+            assert!(
+                !app.command_line
+                    .history_plain_text()
+                    .contains(&format!("Unknown command: {name}")),
+                "{name} is not a command"
+            );
+            request(&mut app, json!({"op":"cancel"}));
+        }
     }
 
     /// The geometric umbrella's default follows the type used last, the way
@@ -4287,6 +4579,8 @@ mod tests {
             json!({"op":"input","kind":"point","point":[10.,0.,0.]}),
         );
         assert_eq!(result["code"], "command_busy");
+        assert_eq!(result["command"], "LINE");
+        assert_eq!(result["owner_client_id"], Value::Null, "the user holds it now");
     }
     #[test]
     fn control_preserves_other_documents_and_waits_for_async_open() {
@@ -5475,6 +5769,79 @@ mod tests {
             after["grips"][0]["point"][0].as_f64(),
             Some(20.0),
             "the grips must belong to the set that is selected now: {after}"
+        );
+    }
+
+    /// An attributed placement that raises the insertion form has no command
+    /// line left to type into, so the form's rows answer through actions.
+    #[test]
+    fn the_attribute_form_is_answerable_through_actions() {
+        use crate::app::insert_attributes_tests::{
+            askable, define, park_insert, placed_attributes,
+        };
+        let mut app = OpenCADStudio::new_for_test();
+        assert_eq!(request(&mut app, json!({"op":"new"}))["ok"], true);
+        let i = app.active_tab;
+        define(
+            &mut app,
+            i,
+            "ATTDIA_SCRIPT",
+            vec![askable("WIDTH", "Width", "100"), askable("HEIGHT", "", "20")],
+        );
+        park_insert(&mut app, i, "ATTDIA_SCRIPT");
+        assert_eq!(
+            app.active_modal,
+            Some(crate::app::ModalKind::InsertAttributes),
+            "the placement is parked on the form"
+        );
+
+        let missed = request(
+            &mut app,
+            json!({"op":"action","request_id":"miss","name":"dialog_answer","tag":"DEPTH","value":"9"}),
+        );
+        assert_eq!(
+            missed["ok"], false,
+            "a row the form never asked for is refused: {missed}"
+        );
+
+        let answered = request(
+            &mut app,
+            json!({"op":"action","request_id":"answer","name":"dialog_answer","tag":"HEIGHT","value":"48"}),
+        );
+        assert_eq!(answered["ok"], true, "{answered}");
+        let ok = request(
+            &mut app,
+            json!({"op":"action","request_id":"ok","name":"dialog_ok"}),
+        );
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!(
+            placed_attributes(&app, i, "ATTDIA_SCRIPT"),
+            vec![
+                ("WIDTH".to_string(), "100".to_string()),
+                ("HEIGHT".to_string(), "48".to_string()),
+            ],
+            "the answered row takes the script's value, the other keeps its default"
+        );
+    }
+
+    #[test]
+    fn a_declined_attribute_form_drops_the_placement() {
+        use crate::app::insert_attributes_tests::{askable, define, park_insert, placed_attributes};
+        let mut app = OpenCADStudio::new_for_test();
+        assert_eq!(request(&mut app, json!({"op":"new"}))["ok"], true);
+        let i = app.active_tab;
+        define(&mut app, i, "ATTDIA_SHRUG", vec![askable("TAG1", "", "7")]);
+        park_insert(&mut app, i, "ATTDIA_SHRUG");
+
+        let declined = request(
+            &mut app,
+            json!({"op":"action","request_id":"decline","name":"dialog_cancel"}),
+        );
+        assert_eq!(declined["ok"], true, "{declined}");
+        assert_eq!(app.active_modal, None, "and the form is gone");
+        assert!(
+            placed_attributes(&app, i, "ATTDIA_SHRUG").is_empty(),
+            "a declined form drops the placement"
         );
     }
 }

@@ -920,6 +920,12 @@ fn append_schema_fields(
         if let Some(constraints) = type_constraints(type_id) {
             object.insert("constraints".into(), constraints);
         }
+        if type_id == "Color" {
+            object.insert(
+                "value_examples".into(),
+                json!([3, {"rgb":[255, 128, 0]}, {"Index":3}, "ByLayer", "ByBlock"]),
+            );
+        }
         fields.push(description);
 
         let nested_prefix = if sequence {
@@ -1213,6 +1219,83 @@ fn requested_handle(request: &Value) -> Result<codec::Handle, String> {
         .ok_or_else(|| "set_properties requires a hexadecimal handle".to_string())
 }
 
+/// The registry type at `path` inside a record of `collection`; `kind` is the
+/// variant an entity or object record serializes as. Follows struct fields,
+/// sequence indices and newtype variants; `None` once the path leaves what
+/// the registry describes.
+fn type_at_path(collection: &str, kind: Option<&str>, path: &str) -> Option<String> {
+    let step = |type_name: &str, segment: &str| -> Option<(String, bool)> {
+        let info = registry_types().get(type_name)?;
+        let field = match info["kind"].as_str()? {
+            "Struct" => info["fields"]
+                .as_array()?
+                .iter()
+                .find(|field| field["name"] == segment)?,
+            "Enum" => {
+                let variant = info["variants"]
+                    .as_array()?
+                    .iter()
+                    .find(|variant| variant["name"] == segment)?;
+                let fields = variant["fields"].as_array()?;
+                (fields.len() == 1 && fields[0]["name"] == "0").then(|| &fields[0])?
+            }
+            _ => return None,
+        };
+        Some((
+            field["type_id"].as_str()?.to_string(),
+            field["is_sequence"].as_bool().unwrap_or(false),
+        ))
+    };
+    let mut current = collection_root_type(collection)?.to_string();
+    if let Some(kind) = kind {
+        current = step(&current, kind)?.0;
+    }
+    let mut segments = path
+        .split('/')
+        .skip(1)
+        .map(|segment| segment.replace("~1", "/").replace("~0", "~"));
+    while let Some(segment) = segments.next() {
+        let (next, sequence) = step(&current, &segment)?;
+        current = next;
+        if sequence {
+            if let Some(index) = segments.next() {
+                index.parse::<usize>().ok()?;
+            }
+        }
+    }
+    Some(current)
+}
+
+/// A colour written the way `entities_create` and `property` take it, an
+/// index number (0 ByBlock, 1-255, 256 ByLayer, 257 None) or
+/// `{"rgb":[r,g,b]}`, in its serialized form. The serialized forms
+/// (`{"Index":3}`, `"ByLayer"`) pass through unchanged.
+fn color_update_value(path: &str, value: Value) -> Result<Value, String> {
+    let color = if let Some(index) = value.as_i64() {
+        if !(0..=257).contains(&index) {
+            return Err(format!(
+                "{path}: a colour index is 0 (ByBlock) through 256 (ByLayer), or 257 (None)"
+            ));
+        }
+        codec::types::Color::from_index(index as i16)
+    } else if let Some(rgb) = value.as_object().and_then(|object| object.get("rgb")) {
+        let components = rgb
+            .as_array()
+            .filter(|components| components.len() == 3)
+            .and_then(|components| {
+                components
+                    .iter()
+                    .map(|component| component.as_u64().and_then(|c| u8::try_from(c).ok()))
+                    .collect::<Option<Vec<u8>>>()
+            })
+            .ok_or_else(|| format!("{path}: rgb takes three components 0 through 255"))?;
+        codec::types::Color::from_rgb(components[0], components[1], components[2])
+    } else {
+        return Ok(value);
+    };
+    json_value(&color)
+}
+
 /// Read-side field names the write side spells differently, per record kind.
 ///
 /// `ocs_read query` reports an INSERT's placement as `position`, and an ATTRIB
@@ -1330,20 +1413,16 @@ fn expanded_scale_update(kind: &str, update: &Value) -> Option<Vec<Value>> {
 /// accepted wherever the stored value is a `{x, y, z}` object. Returns the
 /// request as-is (borrowed) when nothing had to be rewritten, so the common
 /// path allocates nothing.
-fn entity_update_request<'a>(
-    kind: &str,
+fn rewrite_entity_updates(
+    kind: Option<&str>,
     properties: &Value,
-    request: &'a Value,
-) -> Result<std::borrow::Cow<'a, Value>, String> {
-    let updates = request["updates"]
-        .as_array()
-        .ok_or_else(|| "set_properties requires a non-empty updates array".to_string())?;
+    updates: &[Value],
+) -> Vec<Value> {
+    let kind = kind.unwrap_or_default();
     let mut edits: Vec<Value> = Vec::with_capacity(updates.len());
-    let mut rewritten = false;
     for update in updates {
         if let Some(expanded) = expanded_scale_update(kind, update) {
             edits.extend(expanded);
-            rewritten = true;
             continue;
         }
         let mut edit = update.clone();
@@ -1351,31 +1430,25 @@ fn entity_update_request<'a>(
             canonical_entity_update_path(kind, update["path"].as_str().unwrap_or(""))
         {
             edit["path"] = Value::String(canonical);
-            rewritten = true;
         }
         let path = edit["path"].as_str().unwrap_or("");
         if properties.pointer(path).is_some_and(is_point_object) {
             for key in ["value", "expected"] {
                 if let Some(point) = edit.get(key).and_then(point_from_array) {
                     edit[key] = point;
-                    rewritten = true;
                 }
             }
         }
         edits.push(edit);
     }
-    if !rewritten {
-        return Ok(std::borrow::Cow::Borrowed(request));
-    }
-    let mut request = request.clone();
-    request["updates"] = Value::Array(edits);
-    Ok(std::borrow::Cow::Owned(request))
+    edits
 }
 
 fn apply_updates(
     properties: &mut Value,
     request: &Value,
     collection: &str,
+    kind: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let updates = request["updates"]
         .as_array()
@@ -1383,6 +1456,13 @@ fn apply_updates(
     if updates.is_empty() {
         return Err("set_properties requires a non-empty updates array".into());
     }
+    // fork: rewrite the update list before anything is applied — the read side's
+    // field names land on the stored ones, `/scale` expands into its three
+    // factors, and a point may arrive as `[x, y, z]`. Doing it here (not in a
+    // separate request rewrite) keeps the type lookup below working on the
+    // canonical path.
+    let updates = rewrite_entity_updates(kind, properties, updates);
+    let updates = updates.as_slice();
     let mut original_identity = Vec::new();
     collect_identity_values(properties, collection, "", &mut original_identity);
     let mut paths = Vec::with_capacity(updates.len());
@@ -1396,10 +1476,13 @@ fn apply_updates(
         if path_changes_identity(collection, path) {
             return Err(format!("{path} is read-only identity data"));
         }
-        let value = update
+        let mut value = update
             .get("value")
             .ok_or_else(|| format!("update {path} requires value"))?
             .clone();
+        if type_at_path(collection, kind, path).as_deref() == Some("Color") {
+            value = color_update_value(path, value)?;
+        }
         let target = properties
             .pointer_mut(path)
             .ok_or_else(|| format!("property does not exist: {path}"))?;
@@ -1483,7 +1566,7 @@ where
         .cloned()
         .ok_or_else(|| format!("record does not exist in {collection}"))?;
     let mut properties = json_value(&source)?;
-    let paths = apply_updates(&mut properties, request, collection)?;
+    let paths = apply_updates(&mut properties, request, collection, None)?;
     let edited: T = serde_json::from_value(properties).map_err(|error| error.to_string())?;
     if edited.handle() != source.handle() || edited.name() != source.name() {
         return Err("record identity is read-only".into());
@@ -1816,9 +1899,7 @@ impl OpenCADStudio {
                 }
                 let (kind, mut properties) =
                     enum_parts(&source).map_err(|error| failure("serialization_failed", error))?;
-                let request = entity_update_request(&kind, &properties, request)
-                    .map_err(|error| failure("invalid_update", error))?;
-                paths = apply_updates(&mut properties, &request, collection)
+                paths = apply_updates(&mut properties, request, collection, Some(&kind))
                     .map_err(|error| failure("invalid_update", error))?;
                 let mut edited: codec::EntityType = decode_enum(&kind, properties)
                     .map_err(|error| failure("invalid_value", error))?;
@@ -1873,7 +1954,7 @@ impl OpenCADStudio {
                     .ok_or_else(|| failure("record_absent", "object does not exist"))?;
                 let (kind, mut properties) =
                     enum_parts(&source).map_err(|error| failure("serialization_failed", error))?;
-                paths = apply_updates(&mut properties, request, collection)
+                paths = apply_updates(&mut properties, request, collection, Some(&kind))
                     .map_err(|error| failure("invalid_update", error))?;
                 let mut edited: codec::objects::ObjectType = decode_enum(&kind, properties)
                     .map_err(|error| failure("invalid_value", error))?;
@@ -1891,7 +1972,7 @@ impl OpenCADStudio {
                 let source = self.tabs[i].scene.document.header.clone();
                 let mut properties =
                     json_value(&source).map_err(|error| failure("serialization_failed", error))?;
-                paths = apply_updates(&mut properties, request, collection)
+                paths = apply_updates(&mut properties, request, collection, None)
                     .map_err(|error| failure("invalid_update", error))?;
                 let edited =
                     serde_json::from_value(properties).map_err(|error: serde_json::Error| {
@@ -1911,7 +1992,7 @@ impl OpenCADStudio {
                 let source = self.tabs[i].scene.document.summary_info.clone();
                 let mut properties =
                     json_value(&source).map_err(|error| failure("serialization_failed", error))?;
-                paths = apply_updates(&mut properties, request, collection)
+                paths = apply_updates(&mut properties, request, collection, None)
                     .map_err(|error| failure("invalid_update", error))?;
                 let edited =
                     serde_json::from_value(properties).map_err(|error: serde_json::Error| {
@@ -2255,6 +2336,82 @@ mod tests {
         let undo = execute(&mut app, json!({"op":"undo"}), "undo-summary");
         assert_eq!(undo["status"], "completed", "{undo}");
         assert!(app.tabs[i].scene.document.summary_info.author.is_empty());
+    }
+
+    /// `entities_create` and `property` take a colour as an index number or
+    /// `{"rgb":[r,g,b]}`, but `set_properties` only took the serialized enum:
+    /// `{"path":"/color","value":3}` on a layer failed with "invalid type:
+    /// integer". Every Color-typed path now takes all three forms.
+    #[test]
+    fn set_properties_takes_colour_numbers_and_rgb_like_the_other_ops() {
+        use codec::types::Color;
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+        let layer = |app: &OpenCADStudio| app.tabs[i].scene.document.layers.get("0").unwrap().color;
+        let set_layer = |app: &mut OpenCADStudio, id: &str, path: &str, value: Value| {
+            execute(
+                app,
+                json!({
+                    "op":"set_properties",
+                    "collection":"layers",
+                    "name":"0",
+                    "updates":[{"path":path,"value":value}]
+                }),
+                id,
+            )
+        };
+
+        let index = set_layer(&mut app, "layer-index", "/color", json!(3));
+        assert_eq!(index["status"], "completed", "{index}");
+        assert_eq!(layer(&app), Color::Index(3));
+        let rgb = set_layer(
+            &mut app,
+            "layer-rgb",
+            "/color",
+            json!({"rgb":[255, 128, 0]}),
+        );
+        assert_eq!(rgb["status"], "completed", "{rgb}");
+        assert_eq!(layer(&app), Color::from_rgb(255, 128, 0));
+        let serialized = set_layer(&mut app, "layer-serde", "/color", json!({"Index":5}));
+        assert_eq!(serialized["status"], "completed", "{serialized}");
+        assert_eq!(layer(&app), Color::Index(5));
+
+        let out_of_range = set_layer(&mut app, "layer-300", "/color", json!(300));
+        assert_eq!(out_of_range["code"], "invalid_update", "{out_of_range}");
+        assert_eq!(
+            layer(&app),
+            Color::Index(5),
+            "a refused colour changes nothing"
+        );
+        // Only Color-typed paths convert: a number into a string field is
+        // still a type error, not a colour.
+        let not_colour = set_layer(&mut app, "layer-desc", "/description", json!(3));
+        assert_ne!(not_colour["status"], "completed", "{not_colour}");
+
+        let line = codec::entities::Line::from_points(Vector3::ZERO, Vector3::new(1.0, 0.0, 0.0));
+        let entity = app.tabs[i].scene.add_entity(EntityType::Line(line));
+        let red = execute(
+            &mut app,
+            json!({
+                "op":"set_properties",
+                "collection":"entities",
+                "handle":format!("{:X}", entity.value()),
+                "updates":[{"path":"/common/color","value":1}]
+            }),
+            "entity-red",
+        );
+        assert_eq!(red["status"], "completed", "{red}");
+        assert_eq!(
+            app.tabs[i]
+                .scene
+                .document
+                .get_entity(entity)
+                .unwrap()
+                .common()
+                .color,
+            Color::Index(1)
+        );
     }
 
     #[test]

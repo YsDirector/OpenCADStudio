@@ -131,7 +131,7 @@ fn test_block_widget_picker<'a>(
 ) -> Element<'a, Message> {
     let labels = widget.items.clone();
     container(
-        iced::widget::pick_list(
+        crate::ui::dropdown_list::pick_list(
             widget.current,
             (0..widget.items.len()).collect::<Vec<_>>(),
             move |idx: &usize| labels.get(*idx).cloned().unwrap_or_default(),
@@ -1339,7 +1339,8 @@ bg={bg_ms:.1}ms n={view_count}"
                                 project(parameter.definition_label_point)?,
                                 parameter.position_name.clone(),
                                 vp_bounds,
-                                tab.selected_authoring == Some(handle),
+                                tab.selected_authoring == Some(handle)
+                                    || tab.active_cmd.as_ref().is_some_and(|command| command.selection_marker_selected(handle)),
                             ))
                         })
                         .collect()
@@ -1409,10 +1410,15 @@ bg={bg_ms:.1}ms n={view_count}"
                             ))
                         })
                         .map(|(handle, point)| {
-                            let mut g = crate::scene::block_distance_parameter::Graphic::default();
-                            g.base_grips.push(point);
-                            g.labels.push((point, "Basepoint".into()));
-                            (handle, g, point)
+                            (
+                                handle,
+                                crate::scene::block_basepoint::marker_graphic(
+                                    &tab.scene.document,
+                                    session.br_handle,
+                                    point,
+                                ),
+                                point,
+                            )
                         }),
                     )
                     .chain(
@@ -2427,7 +2433,10 @@ bg={bg_ms:.1}ms n={view_count}"
             }
             if let Some(popup) = self.table_popup.as_ref() {
                 if !tab.is_start {
-                    let mut col = column![text(popup.header.clone()).size(12)].spacing(2);
+                    let mut col = column![text(popup.header.clone())
+                        .size(12)
+                        .wrapping(iced::widget::text::Wrapping::None)]
+                    .spacing(2);
                     for (idx, name) in popup.rows.iter().enumerate() {
                         let mark: Element<'_, Message> = if popup.current == Some(idx) {
                             crate::ui::icons::themed_check_cell(true)
@@ -2436,7 +2445,7 @@ bg={bg_ms:.1}ms n={view_count}"
                         };
                         col = col.push(
                             button(
-                                row![container(mark).width(16), text(name).size(12)]
+                                row![container(mark).width(16), text(name).size(12).wrapping(iced::widget::text::Wrapping::None)]
                                     .spacing(2)
                                     .align_y(iced::Center),
                             )
@@ -2445,12 +2454,20 @@ bg={bg_ms:.1}ms n={view_count}"
                             .width(Fill),
                         );
                     }
-                    let panel =
-                        container(iced::widget::scrollable(col).height(iced::Length::Shrink))
-                            .padding(2);
-                    let anchor = iced::Point::new(popup.anchor.x + 12.0, popup.anchor.y + 12.0);
-                    viewport_stack =
-                        viewport_stack.push(position_canvas_overlay(anchor, panel.into()));
+                    let panel = container(
+                        iced::widget::scrollable(col)
+                            .height(iced::Length::Shrink)
+                            .width(iced::Length::Fixed(table_popup_width(
+                                &popup.header,
+                                &popup.rows,
+                            ))),
+                    )
+                    .padding(2);
+                    viewport_stack = viewport_stack.push(position_canvas_overlay_near_cursor(
+                        popup.anchor,
+                        command_line_inset(self),
+                        panel.into(),
+                    ));
                 }
             }
 
@@ -2461,6 +2478,16 @@ bg={bg_ms:.1}ms n={view_count}"
             // are ever needed together.
             let selection_tools = if tab.is_start {
                 None
+            } else if tab.scene.table_cells_handle().is_some() {
+                {
+                    let tools = crate::ui::ribbon::table_cell_tools();
+                    // Rows and columns, merging and locking, formats, inserts,
+                    // linked data and the cell's text, two to a row.
+                    crate::ui::side_toolbar::view_grid(
+                        &[&tools[..6], &tools[6..9], &tools[9..13], &tools[13..17], &tools[17..]],
+                        2,
+                    )
+                }
             } else if self.ribbon.xref_context() {
                 crate::ui::side_toolbar::view(&crate::ui::ribbon::xref_tools())
             } else if let Some(shown) = self.ribbon.point_cloud_context() {
@@ -2547,7 +2574,12 @@ bg={bg_ms:.1}ms n={view_count}"
             // Quick Properties: stay near the selection cursor, flipping around
             // it as needed to remain inside the visible drawing area.
             // Floating (QPLOCATION 1): where it was last dragged.
-            if self.quick_properties && !tab.is_start {
+            // It steps aside once a command runs or something is typed (#2458).
+            if self.quick_properties
+                && !tab.is_start
+                && tab.active_cmd.is_none()
+                && self.command_line.input.is_empty()
+            {
                 if let Some(panel) = tab.properties.quick_view() {
                     viewport_stack = viewport_stack.push(if self.quick_properties_float {
                         overlay::position_canvas_overlay_clamped(
@@ -3053,7 +3085,19 @@ bg={bg_ms:.1}ms n={view_count}"
                     self.tabs[self.active_tab].is_start,
                     &self.tabs[self.active_tab].recent_colors,
                     &self.recent_files,
+                    &self.open_drawing_names(),
                 )
+                .or_else(|| {
+                    // The Start tab has no drawing for the toolbar.
+                    if self.tabs[self.active_tab].is_start {
+                        return None;
+                    }
+                    self.ribbon.qat_customize_overlay(
+                        self.win_size,
+                        self.show_menu_bar,
+                        self.ribbon_closed,
+                    )
+                })
                 .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into())
         };
 
@@ -3101,6 +3145,16 @@ bg={bg_ms:.1}ms n={view_count}"
         }
         .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into());
 
+        // Floating ribbon panels lie over the drawing and the palettes, under
+        // the ribbon's popups and menus.
+        let floating_layer: Element<'_, Message> =
+            if self.clean_screen || self.ribbon_closed || self.tabs[self.active_tab].is_start {
+                None
+            } else {
+                self.ribbon.floating_layer(self.show_block_palette)
+            }
+            .unwrap_or_else(|| iced::widget::Space::new().width(0).height(0).into());
+
         // Pinned slide-outs hang under their panels, over the drawing.
         let pinned_layer: Element<'_, Message> = if self.clean_screen || self.ribbon_closed {
             None
@@ -3131,6 +3185,7 @@ bg={bg_ms:.1}ms n={view_count}"
 
         let composed = stack![
             main_ui,
+            floating_layer,
             pinned_layer,
             ribbon_popup_layer,
             keytip_bar,
@@ -3246,6 +3301,21 @@ bg={bg_ms:.1}ms n={view_count}"
 }
 
 impl OpenCADStudio {
+    /// The open drawings for the Quick Access Switch Windows menu, as
+    /// (tab index, name, is the current one); empty while that menu is
+    /// closed.
+    fn open_drawing_names(&self) -> Vec<(usize, String, bool)> {
+        if self.ribbon.open_dropdown.as_deref() != Some(crate::ui::ribbon::QAT_SWITCH_ID) {
+            return Vec::new();
+        }
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| !tab.is_start)
+            .map(|(index, tab)| (index, tab.tab_display_name(), index == self.active_tab))
+            .collect()
+    }
+
     pub fn subscription(&self) -> Subscription<Message> {
         use iced::event;
         // Only request per-frame ticks while something on screen is animating
@@ -3426,6 +3496,7 @@ impl OpenCADStudio {
         let hatch_pattern_keys = if self.tabs[self.active_tab]
             .properties
             .hatch_pattern_picker_open
+            || self.graphic_attributes.hatch_editor.is_some()
         {
             event::listen_with(hatch_pattern_key_event)
         } else {
@@ -3594,6 +3665,7 @@ impl OpenCADStudio {
                         if !has_printable_text
                             && status == Status::Captured
                             && matches!(arrow, Some(ArrowKey::Up | ArrowKey::Down))
+                            && !crate::ui::dropdown_list::take_dropdown_arrow_captured()
                         {
                             return Some(Message::CommandLineArrowProbe {
                                 direction: arrow?,
@@ -3614,6 +3686,12 @@ impl OpenCADStudio {
                             }
                         }
                         let shortcut = shortcut_key_name(&key, modifiers)?;
+                        if shortcut == "ESCAPE"
+                            && status == Status::Captured
+                            && crate::ui::dropdown_list::take_dropdown_escape_captured()
+                        {
+                            return None;
+                        }
                         if status == Status::Ignored
                             || crate::app::shortcuts::is_global_key(&shortcut)
                         {
@@ -5156,9 +5234,46 @@ pub(super) fn recent_files_panel<'a>(
     .into()
 }
 
+/// The value list is as wide as the widest line it shows, plus the marker
+/// column and the padding around it, and it has no opinion about the canvas.
+fn table_popup_width(header: &str, rows: &[String]) -> f32 {
+    let widest = rows
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(header.chars().count());
+    (widest as f32 + 2.0) * 7.0 + 24.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A two-value list is a few characters wide, however large the canvas it
+    /// is painted over, and a longer line is what widens it — not the viewport.
+    #[test]
+    fn the_value_list_width_follows_the_lines_it_shows() {
+        let narrow = super::table_popup_width("Distance1", &["5.0000".into(), "25.0000".into()]);
+        assert!(
+            narrow < 120.0,
+            "a short list is not sized to the canvas: {narrow}"
+        );
+        let wide =
+            super::table_popup_width("Distance1", &["5.0000, 25.0000, 45.0000, 65.0000".into()]);
+        assert!(
+            wide > narrow * 2.0,
+            "a longer line widens the list: {narrow} → {wide}"
+        );
+        let headered = super::table_popup_width(
+            "Distance1, Distance2, Distance3, Distance4",
+            &["5.0".into()],
+        );
+        assert!(
+            headered > narrow,
+            "the header is one of the lines it shows: {narrow} → {headered}"
+        );
+    }
 
     /// The visibility dropdown draws its entries in one left-aligned column,
     /// with a fixed leading slot for the tick of the state in use.

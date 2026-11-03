@@ -304,7 +304,7 @@ impl OpenCADStudio {
             parametric_constraints,
             reference_designations: Vec::new(),
             named_parameters,
-            label: format!("Edit block {}", session.block_name),
+            label: super::document::HistoryLabel::formatted(format!("Edit block {}", session.block_name), "edit-block", session.block_name.to_owned().into()),
         })
     }
 
@@ -604,7 +604,7 @@ impl OpenCADStudio {
         let mut delta = self
             .block_edit_delta(i, true)
             .expect("a new definition changes the document");
-        delta.label = format!("Save block as {name}");
+        delta.label = super::document::HistoryLabel::formatted(format!("Save block as {name}"), "save-block", name.to_owned().into());
         let mut history = self.tabs[i].block_edit_history.take().unwrap();
         std::mem::swap(&mut self.tabs[i].history, &mut history.main);
         self.push_undo_entry(i, HistorySnapshot::Delta(Box::new(delta)));
@@ -756,6 +756,10 @@ impl OpenCADStudio {
             }
             self.tabs[i].scene.visibility_states.remove(&definition);
         }
+        // The saved definition advertises attributes because its body holds
+        // them, so an attribute authored here marks the record and erasing the
+        // last one takes the mark off again.
+        crate::scene::Scene::sync_attribute_flag(&mut self.tabs[i].scene.document, &name);
         // The saved definition's terminator belongs after its body. The undo
         // entry below is taken afterwards, so it carries the swap.
         if let Err(error) = self.tabs[i].scene.reterminate_block_definition(&name) {
@@ -807,6 +811,8 @@ impl OpenCADStudio {
             self.tabs[i].scene.object_isolation = history.return_isolation;
         }
         self.tabs[i].active_block_edit = None;
+        // An open Parameters Manager cell belongs to the session that ended.
+        self.tabs[i].parameters_panel = Default::default();
         self.restore_after_block_edit_close(
             i,
             None,

@@ -365,6 +365,7 @@ impl OpenCADStudio {
             None => PasteSpace::Model,
         };
         let first_new_handle = self.tabs[i].scene.document.next_handle();
+        let block_records_before = self.tabs[i].scene.document.block_records.len();
         let (by_index, handle_map) = paste_entities_kernel(
             &mut self.tabs[i].scene.document,
             &clipboard,
@@ -377,8 +378,11 @@ impl OpenCADStudio {
         // `Scene::add_entities`): fresh top-level solids tessellate once here
         // instead of once per entity. Block-definition merges (and pasted
         // Block/BlockEnd sentinels) need the full geometry rebuild, matching
-        // the `bump_geometry` tails the Scene helpers used to run.
-        let mut needs_geometry_bump = !deps.blocks.is_empty();
+        // the `bump_geometry` tails the Scene helpers used to run. INSERTs of
+        // blocks this drawing already defines add no definition, so they take
+        // the per-entity bump like any other pasted entity.
+        let mut needs_geometry_bump =
+            self.tabs[i].scene.document.block_records.len() != block_records_before;
         let mut changes = Vec::new();
         for &handle in &by_index {
             if handle.is_null() {
@@ -1219,7 +1223,7 @@ fn add_entity_clone_doc(
     crate::scene::Scene::reset_clone_subhandles(doc, &mut entity);
     entity.common_mut().handle = Handle::NULL;
     entity.common_mut().owner_handle = Handle::NULL;
-    match space {
+    let handle = match space {
         PasteSpace::Model => doc.add_entity(entity),
         PasteSpace::Layout(layout) => doc.add_entity_to_layout(entity, layout),
         PasteSpace::Block(block) => {
@@ -1227,7 +1231,11 @@ fn add_entity_clone_doc(
             doc.add_entity(entity)
         }
     }
-    .unwrap_or(Handle::NULL)
+    .unwrap_or(Handle::NULL);
+    if !handle.is_null() {
+        crate::scene::Scene::adopt_attributes(doc, handle);
+    }
+    handle
 }
 
 /// Document-level verbatim block-definition recreate: the `&mut Document`
@@ -1271,6 +1279,7 @@ pub(crate) fn define_block_raw_doc(
     if let Some(record) = doc.block_records.get_mut(name) {
         record.block_end_handle = end_handle;
     }
+    crate::scene::Scene::sync_attribute_flag(doc, name);
 }
 
 /// Shared sub-handle reset + owner stamp for block-definition members.
@@ -2169,6 +2178,56 @@ mod paste_entities_kernel_tests {
     #[test]
     fn pasted_image_owns_reactor_in_another_drawing() {
         check_pasted_image_owns_reactor(true);
+    }
+
+    #[test]
+    fn pasting_an_insert_of_an_existing_block_stays_incremental() {
+        use codec::entities::{Insert, Line};
+        use codec::types::Vector3;
+        let mut app = crate::app::OpenCADStudio::new_for_test();
+        app.tabs
+            .push(crate::app::document::DocumentTab::new_drawing(99));
+        let tab = app.tabs.len() - 1;
+        app.tabs[tab].scene.define_block_raw(
+            "PART",
+            Vector3::ZERO,
+            vec![codec::EntityType::Line(Line::from_points(
+                Vector3::ZERO,
+                Vector3::new(1.0, 0.0, 0.0),
+            ))],
+        );
+        let source = app.tabs[tab]
+            .scene
+            .add_entity(codec::EntityType::Insert(Insert::new(
+                "PART",
+                Vector3::ZERO,
+            )));
+        let (entities, deps) = copy_to_clipboard_kernel(&app.tabs[tab].scene.document, &[source]);
+        assert!(
+            !deps.blocks.is_empty(),
+            "the clipboard carries the block it uses"
+        );
+        app.clipboard = entities;
+        app.clipboard_deps = deps;
+        app.active_tab = tab;
+        let epoch_before = app.tabs[tab].scene.geometry_epoch;
+        let records_before = app.tabs[tab].scene.document.block_records.len();
+        let handles = app.finalize_paste(
+            tab,
+            Some(crate::command::EntityTransform::Translate(
+                glam::DVec3::new(50.0, 0.0, 0.0),
+            )),
+        );
+        assert_eq!(handles.len(), 1);
+        assert_eq!(
+            app.tabs[tab].scene.document.block_records.len(),
+            records_before
+        );
+        let changes = app.tabs[tab]
+            .scene
+            .replay_since(epoch_before)
+            .expect("pasting into an existing block must not force a full rebuild");
+        assert!(changes.iter().any(|(h, _)| *h == handles[0]));
     }
 
     #[test]

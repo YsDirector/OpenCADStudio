@@ -56,6 +56,11 @@ impl OpenCADStudio {
             Some(K::RefEdit) => crate::tr!("ref-edit", "dialog-title"),
             Some(K::PdfPassword) => crate::tr!("pdf-password", "title"),
             Some(K::DimInspect) => crate::tr!("dim-inspect", "title"),
+            Some(K::TableCellBorders) => crate::tr!("table-cells", "borders-title"),
+            Some(K::TableCellContents) => crate::tr!("table-cells", "contents-title"),
+            Some(K::TableCellBlock) => crate::tr!("table-cells", "block-title"),
+            Some(K::TableCellFormat) => crate::tr!("table-cells", "format-title"),
+            Some(K::TableCellWarning) => crate::tr!("table-cells", "warning-title"),
             Some(K::PdfShxSettings) => crate::tr!("pdf-shx", "title"),
             Some(K::UnderlayLayers) => crate::t!("Underlay Layers").into_owned(),
             Some(K::PdfImportSettings) => crate::t!("PDF Import Settings").into_owned(),
@@ -73,6 +78,7 @@ impl OpenCADStudio {
             Some(K::GeometricTolerance) => crate::t!("Geometric Tolerance").into_owned(),
             Some(K::AttDef) => crate::t!("Attribute Definition").into_owned(),
             Some(K::AttDefEdit) => crate::t!("Edit Attribute Definition").into_owned(),
+            Some(K::InsertAttributes) => crate::t!("Edit Attributes").into_owned(),
             Some(K::AttMan) => crate::t!("Block Attribute Manager").into_owned(),
             Some(K::CountInvalidArea) => crate::t!("Count - Invalid Area").into_owned(),
             Some(K::Field) => crate::t!("Field").into_owned(),
@@ -529,6 +535,36 @@ impl OpenCADStudio {
                     crate::ui::window::dim_inspect_dialog::view(state, flow)
                 })
             }
+            super::super::ModalKind::TableCellBorders => {
+                let state = self.table_cell_borders.as_ref()?;
+                sized_flow(ex, 470, 420, |flow| {
+                    crate::ui::window::table_cell_dialog::view_borders(state, flow)
+                })
+            }
+            super::super::ModalKind::TableCellContents => {
+                let state = self.table_cell_contents.as_ref()?;
+                sized_flow(ex, 440, 400, |flow| {
+                    crate::ui::window::table_cell_dialog::view_contents(state, flow)
+                })
+            }
+            super::super::ModalKind::TableCellBlock => {
+                let state = self.table_cell_block.as_ref()?;
+                sized_flow(ex, 470, 330, |flow| {
+                    crate::ui::window::table_cell_dialog::view_block(state, flow)
+                })
+            }
+            super::super::ModalKind::TableCellWarning => {
+                let (_, cells) = self.table_cell_warning.as_ref()?;
+                sized_flow(ex, 460, 230, |flow| {
+                    crate::ui::window::table_cell_dialog::view_warning(cells, flow)
+                })
+            }
+            super::super::ModalKind::TableCellFormat => {
+                let state = self.table_cell_format.as_ref()?;
+                sized_flow(ex, 520, 470, |flow| {
+                    crate::ui::window::table_cell_dialog::view_format(state, flow)
+                })
+            }
             super::super::ModalKind::RefEdit => {
                 let state = self.refedit_dialog.as_ref()?;
                 sized_flow(ex, 560, 470, |flow| {
@@ -624,6 +660,12 @@ impl OpenCADStudio {
                 let state = self.attdef_dialog.as_ref()?;
                 sized_flow(ex, 720, 520, |flow| {
                     crate::ui::window::attdef_dialog::view(state, flow)
+                })
+            }
+            super::super::ModalKind::InsertAttributes => {
+                let state = self.insert_attr_dialog.as_ref()?;
+                sized_flow(ex, 500, 520, |flow| {
+                    crate::ui::window::insert_attr_dialog::view(state, flow)
                 })
             }
             super::super::ModalKind::SheetSet => {
@@ -938,28 +980,27 @@ impl OpenCADStudio {
             super::super::ModalKind::TextStyle => {
                 let tab = &self.tabs[self.active_tab];
                 let doc = &tab.scene.document;
-                let styles: Vec<String> = tab
-                    .scene
-                    .document
-                    .text_styles
-                    .iter()
-                    .map(|s| s.name.clone())
-                    .collect();
-                let selected_style = doc.text_styles.get(&self.textstyle_selected);
-                let (backward, upside_down, vertical, annotative, read_only) = selected_style
-                    .map(|style| {
-                        (
-                            style.flags.backward,
-                            style.flags.upside_down,
-                            style.is_vertical,
-                            style.annotative,
-                            style.xref_dependent,
-                        )
-                    })
-                    .unwrap_or((false, false, false, false, false));
-                let ttf_flags = selected_style.map_or(0, |style| style.true_type_font_flags);
-                let in_use =
-                    self.style_in_use(crate::app::StyleKind::Text, &self.textstyle_selected);
+                let styles: Vec<String> = self.style_names(super::super::StyleKind::Text);
+                let draft = &self.textstyle_draft;
+                let edited = draft.resolved();
+                let read_only = self.selected_textstyle_is_read_only();
+                let pending = self.textstyle_pending_changes();
+                let apply_summary = crate::ui::style::textstyle::ApplySummary {
+                    properties: pending.iter().map(|c| c.properties.len()).sum(),
+                    styles: pending
+                        .iter()
+                        .map(|change| {
+                            (
+                                change.name.clone(),
+                                crate::app::text_style_users::summary_lines(change),
+                            )
+                        })
+                        .collect(),
+                };
+                let ttf_flags = draft.style.true_type_font_flags;
+                let (listed, rows) = self.textstyle_list();
+                let preview = self.textstyle_preview(&edited);
+                let usage = crate::app::text_style_users::Usage::of(self.selected_textstyle_users());
                 let compare_opts: Vec<String> = styles
                     .iter()
                     .filter(|name| !name.eq_ignore_ascii_case(&self.textstyle_selected))
@@ -972,7 +1013,8 @@ impl OpenCADStudio {
                     .or_else(|| compare_opts.first().cloned())
                     .unwrap_or_default();
                 let mut comparison_sections = Vec::new();
-                if let (Some(a), Some(b)) = (selected_style, doc.text_styles.get(&compare_name)) {
+                if let Some(b) = doc.text_styles.get(&compare_name) {
+                    let a = &edited;
                     if (
                         &a.font_file,
                         &a.big_font_file,
@@ -1000,28 +1042,42 @@ impl OpenCADStudio {
                 sized_flow(ex, 960, 680, |flow| {
                     crate::ui::style::textstyle::view_window(
                         crate::ui::style::textstyle::TextStyleView {
-                            styles: styles.clone(),
+                            styles: listed.clone(),
+                            rows: rows.clone(),
+                            in_use_only: self.textstyle_in_use_only,
                             selected: &self.textstyle_selected,
                             current: &tab.scene.document.header.current_text_style_name,
-                            tab: self.textstyle_tab,
                             compare_name: compare_name.clone(),
                             compare_opts: compare_opts.clone(),
                             comparison_sections: comparison_sections.clone(),
                             read_only,
-                            in_use,
-                            font_buf: &self.textstyle_font,
-                            width_buf: &self.textstyle_width,
-                            oblique_buf: &self.textstyle_oblique,
-                            height_buf: &self.textstyle_height,
-                            bigfont_buf: &self.textstyle_bigfont,
-                            ttf_buf: &self.textstyle_ttf,
+                            usage: usage.clone(),
+                            font_buf: &draft.style.font_file,
+                            width_buf: &draft.width.text,
+                            oblique_buf: &draft.oblique.text,
+                            height_buf: &draft.height.text,
+                            bigfont_buf: &draft.style.big_font_file,
+                            ttf_buf: &draft.style.true_type_font,
+                            width_error: draft.width.error(),
+                            oblique_error: draft.oblique.error(),
+                            height_error: draft.height.error(),
+                            width_was: draft.width.was(),
+                            oblique_was: draft.oblique.was(),
+                            height_was: draft.height.was(),
+                            invalid_fields: draft.invalid_fields(),
+                            use_big_font: draft.big_font_on,
+                            font_picker: &self.textstyle_font_picker,
+                            turned_off: draft.turned_off.clone(),
+                            apply_summary: apply_summary.clone(),
+                            preview: preview.clone(),
+                            sample: &self.textstyle_sample,
                             bold: ttf_flags & crate::entities::text_support::TTF_FLAG_BOLD != 0,
                             italic: ttf_flags & crate::entities::text_support::TTF_FLAG_ITALIC
                                 != 0,
-                            backward,
-                            upside_down,
-                            vertical,
-                            annotative,
+                            backward: draft.style.flags.backward,
+                            upside_down: draft.style.flags.upside_down,
+                            vertical: draft.style.is_vertical,
+                            annotative: draft.style.annotative,
                             rename_active: self.style_rename.as_deref(),
                             rename_buf: &self.style_rename_buf,
                         },
@@ -1180,14 +1236,16 @@ impl OpenCADStudio {
                     ) {
                         comparison_sections.push(crate::i18n::translate("General").into_owned());
                     }
-                    for (label, different) in [
-                        ("Data Row", a.data_row_style != b.data_row_style),
-                        ("Header Row", a.header_row_style != b.header_row_style),
-                        ("Title Row", a.title_row_style != b.title_row_style),
-                    ] {
-                        if different {
-                            comparison_sections.push(crate::i18n::translate(label).into_owned());
-                        }
+                    if a.modern_overrides != b.modern_overrides
+                        || a.data_row_style != b.data_row_style
+                        || a.header_row_style != b.header_row_style
+                        || a.title_row_style != b.title_row_style
+                    {
+                        comparison_sections.push(crate::i18n::translate("Cell styles").into_owned());
+                    }
+                    if a.template().is_some() != b.template().is_some() {
+                        comparison_sections
+                            .push(crate::i18n::translate("Starting table").into_owned());
                     }
                 }
                 let in_use =
@@ -1205,19 +1263,36 @@ impl OpenCADStudio {
                             comparison_sections: comparison_sections.clone(),
                             in_use,
                             in_use_only: self.tablestyle_in_use_only,
-                            hmargin: &self.ts_hmargin,
-                            vmargin: &self.ts_vmargin,
                             description: &self.ts_description,
-                            cell_textstyle: &self.ts_cell_textstyle,
+                            cell: &self.ts_cell,
+                            cell_name: &self.ts_cell_name,
                             cell_height: &self.ts_cell_height,
-                            cell_textcolor: &self.ts_cell_textcolor,
-                            cell_fillcolor: &self.ts_cell_fillcolor,
-                            cell_datatype: &self.ts_cell_datatype,
-                            cell_unittype: &self.ts_cell_unittype,
+                            cell_angle: &self.ts_cell_angle,
+                            cell_hmargin: &self.ts_cell_hmargin,
+                            cell_vmargin: &self.ts_cell_vmargin,
                             cell_format: &self.ts_cell_format,
-                            border_lw: &self.ts_border_lw,
-                            border_color: &self.ts_border_color,
-                            border_spacing: &self.ts_border_spacing,
+                            edge_spacing: &self.ts_edge_spacing,
+                            text_styles: tab
+                                .scene
+                                .document
+                                .text_styles
+                                .iter()
+                                .map(|style| (style.name.clone(), style.handle))
+                                .collect(),
+                            linetypes: tab
+                                .scene
+                                .document
+                                .line_types
+                                .iter()
+                                .map(|linetype| (linetype.name.clone(), linetype.handle))
+                                .collect(),
+                            template: selected_style
+                                .and_then(|style| style.template())
+                                .and_then(|handle| tab.scene.document.objects.get(&handle))
+                                .and_then(|object| match object {
+                                    ObjectType::TableTemplate(table) => Some(table),
+                                    _ => None,
+                                }),
                             rename_active: self.style_rename.as_deref(),
                             rename_buf: &self.style_rename_buf,
                             color_open: self.ts_color_open,
@@ -2286,7 +2361,7 @@ fn save_as_dialog_window<'a>(
     items.push(
         row![
             label(t!("Format:")).width(70),
-            iced::widget::pick_list(sel_fmt, options, |value| value.clone())
+            crate::ui::dropdown_list::pick_list(sel_fmt, options, |value| value.clone())
                 .on_select(Message::SaveDialogFormatChanged)
             .width(field_width),
         ]
@@ -2371,7 +2446,7 @@ fn unsaved_changes_dialog_window(
                     } else {
                         Message::UnsavedDialogSave
                     },
-                    button::primary
+                    crate::ui::style::form::accent_button
                 ),
                 iced::widget::Space::new().width(8),
                 dialog_button(
@@ -2385,7 +2460,7 @@ fn unsaved_changes_dialog_window(
                     } else {
                         Message::UnsavedDialogDiscard
                     },
-                    button::danger
+                    crate::ui::style::form::neutral_button
                 ),
                 iced::widget::Space::new().width(8),
                 dialog_button(
@@ -2395,7 +2470,7 @@ fn unsaved_changes_dialog_window(
                     } else {
                         Message::UnsavedDialogCancel
                     },
-                    button::secondary
+                    crate::ui::style::form::neutral_button
                 ),
             ],
         ]

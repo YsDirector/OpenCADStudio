@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = 傾斜角度
+    .reset-to-style = スタイルに戻す (__ocs_fmt_0__)
+    .new-text-style = 新しい文字スタイル
+    .new-style-from-selection = 選択から新しいスタイル…
+    .update-style-from-selection = 選択から「__ocs_fmt_0__」を更新
+    .text-style-manager-dialog = 文字スタイルマネージャー…
+    .style-updated = スタイル '__ocs_fmt_0__' を更新しました。
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = メニュー バー
     .ribbon-tab = リボン タブ
     .no-matches = 一致するコマンドはありません
+    .switch-windows = ウィンドウを切り替え
+    .center-layer = 中心線画層
+    .user-interface = ユーザー インタフェース
+    .no-open-drawings = 開いている図面はありません
+    .viewcube = ViewCube
+    .ucs-icon = UCS アイコン
+    .file-tabs = ファイル タブ
+    .layout-tabs = レイアウト タブ
+    .command-line = コマンド ライン
+    .status-bar = ステータス バー
+    .customize-qat = クイック アクセス ツールバーをカスタマイズ
+    .more-commands = その他のコマンド…
+    .more-commands-title = クイック アクセス ツールバーにコマンドを追加
+    .find-command-to-add = 追加するコマンドを入力
+    .show-below = リボンの下に表示
+    .show-above = リボンの上に表示
+    .qat-place-unavailable = リボンが閉じている間は使用できません
+    .qat-new = 新規作成
+    .qat-open = 開く
+    .qat-save = 上書き保存
+    .qat-save-as = 名前を付けて保存
+    .qat-plot = 印刷
+    .qat-undo = 元に戻す
+    .qat-redo = やり直し
+    .qat-measure = 計測
+    .qat-batch-plot = 一括印刷
+    .qat-match-properties = プロパティ コピー
+    .qat-plot-preview = 印刷プレビュー
+    .qat-properties = プロパティ
+    .add-to-qat = クイック アクセス ツールバーに追加
+    .remove-from-qat = クイック アクセス ツールバーから削除
+    .add-separator = 区切り線を追加
+    .remove-separator = 区切り線を削除
+    .qat-show-below = クイック アクセス ツールバーをリボンの下に表示
+    .qat-show-above = クイック アクセス ツールバーをリボンの上に表示
+    .return-to-ribbon = リボンに戻す
+    .float-title-side = パネル タイトルを横に表示し、追加ツールを右に開く
+    .float-title-bottom = パネル タイトルを下に表示し、追加ツールを下に開く
+    .floating-suffix = （フローティング）
 
 options =
     .language-section = 言語
@@ -3522,6 +3568,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: __ocs_fmt_0__ 個のレイヤーを隔離しました。
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: LAYISO で分離された画層はありません。
     .laymatch-select-objects-to-change-layer = LAYMATCH  レイヤーを変更するオブジェクトを選択:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  コピーするオブジェクトを選択:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  コピー先の画層上のオブジェクトを選択:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  レイヤーを合わせる基準オブジェクトを選択:
@@ -3543,6 +3592,7 @@ layers =
     .layer-s-frozen = レイヤーをフリーズしました。
     .layer-s-locked = レイヤーをロックしました。
     .layer-s-turned-off = レイヤーをオフにしました。
+    .layoff-select-object-on-layer-undo = LAYOFF  オフにする画層上のオブジェクトを選択 または [Undo]:
     .layer-s-unlocked = レイヤーのロックを解除しました。
     .layers = レイヤー: __ocs_fmt_0__
     .lock = ロック
@@ -3920,6 +3970,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  回転角度を指定 <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE  挿入点を指定:
+    .tcell-row-above =
+        上に
+        行を挿入
+    .tcell-row-below =
+        下に
+        行を挿入
+    .tcell-delete-rows =
+        行を
+        削除
+    .tcell-col-left =
+        左に
+        列を挿入
+    .tcell-col-right =
+        右に
+        列を挿入
+    .tcell-delete-cols =
+        列を
+        削除
+    .tcell-merge =
+        セルを
+        結合
+    .tcell-unmerge =
+        結合を
+        解除
+    .tcell-lock =
+        セルの
+        ロック
+    .tcell-edit =
+        文字を
+        編集
+    .tcell-match =
+        セルを
+        一致
+    .tcell-borders =
+        セルの
+        枠線
+    .tcell-format =
+        データ
+        書式
+    .tcell-block =
+        ブロックを
+        挿入
+    .tcell-field =
+        フィールドを
+        挿入
+    .tcell-contents =
+        セル内容を
+        管理
+    .tcell-link =
+        セルを
+        リンク
+    .tcell-download =
+        ソースから
+        ダウンロード
+    .tcell-row-style = 行スタイル
+    .tcell-column-style = 列スタイル
+    .tcell-width = セルの幅
+    .tcell-height = セルの高さ
+    .tcell-border-color = 枠線の色
+    .tcell-border-lineweight = 枠線の線の太さ
+    .tcell-border-linetype = 枠線の線種
+    .tcell-locking = セルのロック
+    .tcell-data-link = セルのデータリンク
+    .tcell-select-destination = コピー先のセルを選択:
+    .tcell-select-cell = 表のセルを選択:
+    .tcell-range-first = セル範囲の最初のコーナーを選択:
+    .tcell-range-second = セル範囲の 2 番目のコーナーを選択:
+    .tcell-align-prompt = セルの位置合わせを入力 [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = データ書式を入力 [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = ブロック名を入力 または [?]:
+    .tcell-formula-prompt = 計算式を入力 [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = 行/列ごと
+    .tcell-unlocked = ロック解除
+    .tcell-content-locked = 内容をロック
+    .tcell-format-locked = 書式をロック
+    .tcell-content-format-locked = 内容と書式をロック
+    .tcell-not-linked = リンクなし
+    .tcell-invalid-cell = 無効なセルです。
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  挿入点を指定:
@@ -6516,9 +6644,57 @@ dimstyle =
     .move-text-outside-first = 先に寸法値を外側へ移動
     .period = ピリオド
     .space = 空白
+    .separator-none = (なし)
     .surveyors-units = 測量単位
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = この図面内
+    .stroke-fonts-shx = ストロークフォント (SHX)
+    .font-folders = フォントフォルダー
+    .truetype-fonts = TrueType フォント
+    .font-missing-drawn-with = 見つかりません · __ocs_fmt_0__ で描画
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = 「__ocs_fmt_0__」を使用
+    .face-regular = 標準
+    .face-bold-italic = 太字 斜体
+    .font-style = フォント スタイル
+    .truetype-fonts-only = TrueType フォントのみ
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. スタイルに従う文字 1 件が更新されます。
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. スタイルに従う文字 __ocs_fmt_3__ 件が更新されます。
+    .style-update-in-blocks = ブロック定義内: __ocs_fmt_0__。
+    .style-update-keeps-one = 独自の値を持つ文字 1 件はその値を保持します。
+    .style-update-keeps-many = 独自の値を持つ文字 __ocs_fmt_0__ 件はその値を保持します。
+    .style-update-xref-undo = 外部参照内の文字は変更されません。スタイルの変更と合わせて 1 回の元に戻す操作です。
+    .rename-hint = 名前をダブルクリックすると名前を変更できます。
+    .modified-was = 変更済み · 元は __ocs_fmt_0__
+    .height-asked-hint = 0 = 文字を配置するときに高さを指定します。
+    .annotative-paper-hint = オン: 上の高さは用紙上の高さです。
+    .backward-hint = 反転と上下反転は一行文字と属性に適用され、MTEXT には適用されません。
+    .on-apply = 適用時
+    .sample-text = サンプル文字
+    .where-used = 使用箇所
+    .kind-single-line-text = 一行文字
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = 属性定義
+    .no-texts-use-style = このスタイルを使う文字はありません。
+    .inside-one-block = そのうち __ocs_fmt_0__ 件は 1 つのブロック定義内。
+    .inside-blocks = そのうち __ocs_fmt_0__ 件は __ocs_fmt_1__ 個のブロック定義内。
+    .used-by-one-text = 1 件の文字が使用
+    .used-by-texts = __ocs_fmt_0__ 件の文字が使用
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = スタイルを読み込む
     .select-drawing-to-import-styles-from = スタイルを読み込む図面を選択
     .select-the-styles-to-import = 読み込むスタイルを選択してください
@@ -8001,3 +8177,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = 項目数
+    .row-count = 行数
+    .row-and-column-count = 行数と列数
+    .item-count = 項目数
+    .angle-between-items = 項目間の角度
+    .prompt-columns = 列数を指定 (Ctrl: 列間隔の合計):
+    .prompt-rows = 行数を指定 (Ctrl: 行間隔の合計):
+    .prompt-rows-columns = 行数と列数を指定:
+    .prompt-items = 項目数を指定 (Ctrl: 全体角度または間隔の合計):
+    .prompt-column-spacing = 列の間隔を指定:
+    .prompt-row-spacing = 行の間隔を指定:
+    .prompt-item-spacing = 項目の間隔を指定:
+    .prompt-item-angle = 項目間の角度を指定:
+    .prompt-radius = 半径を指定:
+block-chain =
+    .label = アクションを連鎖
+    .cycle = ブロックのアクション連鎖に循環があります。
+
+block-action-bars =
+    .requires-session = BACTIONBAR にはアクティブなブロックエディターのセッションが必要です。
+    .enable-display = アクションバーを表示するには BACTIONBARMODE を 1 に設定してください。
+    .parameters-changed = パラメーター一覧が変更されました。BACTIONBAR を再実行してください。
+    .display-updated = アクションバーの表示を更新しました。
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  パラメーターを選択、名前を入力、または [All] <選択済み>:
+    .prompt-all = BACTIONBAR  パラメーターを選択、名前を入力、または [All] <All>:
+    .choose-mode = Show、Hide、Reset のいずれかを選択してください。
+    .unique-parameter = 一意のパラメーター名を入力するか、端点を選択するか、All を選択してください。
+    .enter-parameter = パラメーター名を入力するか、All を選択してください。
+    .pick-endpoint = パラメーターの端点を選択するか、All を選択してください。
+
+block-construction =
+    .requires-session = BCONSTRUCTION はブロックエディターでのみ使用できます。
+    .choose-operation = Convert、Revert、Show、Hide のいずれかを選択してください。
+    .stale-session = 構築ジオメトリのブロックエディターのセッションは有効ではなくなりました。
+    .changed-count = __ocs_fmt_0__ 個のジオメトリオブジェクトを変更しました。
+    .prompt-selection = BCONSTRUCTION  ジオメトリを選択 または [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  [Convert/Revert] <Convert> を選択するか、Enter を押して選択した操作を適用:
+    .revert = 元に戻す
+    .history = 構築ジオメトリを編集
+    .unsupported-record = この構築レコードのバージョンまたは値はサポートされていません。
+    .open-definition = 構築ジオメトリを編集する前にブロック定義を開いてください。
+    .missing-object = 選択した構築オブジェクトは使用できなくなりました。
+    .active-geometry = アクティブなブロック定義内のジオメトリを選択してください。
+    .locked-layer = ロックされた画層上の構築ジオメトリは変更できません。
+    .revert-layer = 元に戻すジオメトリには、既存のロックされていない画層を選択してください。
+
+block-authoring-history =
+    .alignment-type = 位置合わせの種類
+    .action-override = ブロックアクションのオーバーライドを編集
+    .action-chain = ブロックアクションの連鎖を編集
+    .action-base = ブロックアクションの基点を編集
+    .parameter-chain = BEDIT パラメーターのアクションを連鎖
+    .value-set = BEDIT パラメーターの値セット
+    .parameter-metadata = ブロックパラメーターのメタデータを編集
+    .authoring-grip = ブロック作成グリップ
+
+block-operation-history =
+    .reset-references = ブロック参照をリセット
+    .associate-action = ブロックアクションを関連付け
+    .action-selection = アクションの選択セット
+    .test-parameter = テストブロックのパラメーター
+    .reference-parameter = ブロック参照のパラメーター
+    .align-reference = ブロック参照を位置合わせ
+    .insertion-grip-order = 挿入グリップの順序を変更
+    .move-grip = ネイティブのブロックグリップを移動
+    .configure-grips = ブロックパラメーターのグリップを設定
+    .lookup-tables = ルックアップテーブル
+    .hyperlink = ブロックのハイパーリンク
+    .properties = ブロックのプロパティ
+    .properties-table = ブロックプロパティテーブル
+    .visibility-state = 可視性の状態
+    .visibility-states = 可視性の状態一覧
+
+block-formatted-history =
+    .action = { $label } アクション
+    .parameter = { $label } パラメーター
+    .edit-block = ブロック { $label } を編集
+    .save-block = ブロックを { $label } として保存
+    .delete-block = ブロック { $label } を削除
+
+block-history-kinds =
+    .flip = 反転
+    .polar-stretch = 極ストレッチ
+    .basepoint = 基点
+    .lookup = ルックアップ
+
+block-action-properties =
+    .base-point = アクションの基点
+    .overrides = アクションの上書き
+    .multiplier = 距離乗数
+    .angle-offset = 角度オフセット（度）
+    .chain = アクションの連鎖
+    .chain-to = 連鎖先
+
+block-parameter-properties =
+    .show-properties = プロパティに表示
+    .parameter-name = パラメーター名
+    .grip-count = グリップ数
+    .dependent-base = 従属する基点
+    .offset-x = 基点オフセット X
+    .offset-y = 基点オフセット Y
+    .base-grip = 基点グリップの位置
+    .end-grip = 端点グリップの位置
+    .x-grip = X グリップの位置
+    .y-grip = Y グリップの位置
+
+block-value-set =
+    .use-min = { $label } の最小値を使用
+    .use-max = { $label } の最大値を使用
+    .use-increment = { $label } の増分を使用
+    .use-list = { $label } の許可値リストを使用
+    .min = { $label } の最小値
+    .max = { $label } の最大値
+    .increment = { $label } の増分
+    .values = { $label } の許可値
+    .title = 値セット
+    .x-distance = X 距離
+    .y-distance = Y 距離
+
+table-style-cells =
+    .tbl-start-from-style = 表スタイルから開始
+    .tbl-extra-columns = 追加の列
+    .tbl-extra-rows = 追加の行
+    .tbl-keep-from-template = 開始表から保持する項目:
+    .tbl-keep-label-text = ラベルセルの文字
+    .tbl-keep-data-text = データセルの文字
+    .tbl-keep-overrides = セルスタイルの優先
+    .tbl-keep-links = データリンク
+    .tbl-keep-fields = フィールド
+    .tbl-keep-formulas = 計算式
+    .tbl-extra-whole = 追加の行数と列数は整数でなければなりません。
+    .from-style-insertion = __ocs_arg_n__  挿入点を指定 または [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  表スタイル名を入力 または [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  追加の行数を入力 <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  追加の列数を入力 <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  挿入オプションを入力 [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  挿入する表に __ocs_arg_what__ を含めますか? [Yes/No] <__ocs_arg_current__>:
+    .label-text = ラベルの文字
+    .data-text = データの文字
+    .formulas = 計算式
+    .fields = フィールド
+    .data-links = データリンク
+    .blocks = ブロック
+    .cell-style-overrides = セルスタイルの優先
+    .style-name-header = 表スタイル名
+    .no-starting-table = 表スタイルに表が含まれていません。
+    .select-table = 表を選択:
+    .not-a-table = オブジェクトは表ではありません。
+    .cell-style-exists = この名前のセルスタイルは既に存在します。
+    .cell-style-in-use = セルスタイルは使用中のため削除できません。
+    .template-size = __ocs_arg_rows__ 行 × __ocs_arg_columns__ 列
+    .cell-properties = セルのプロパティ
+    .cell-text = セルの文字
+    .cell-borders = セルの枠線
+    .cell-styles = セルスタイル
+    .label = ラベル
+    .margins = 余白
+    .merge-on-create = 行/列の作成時にセルを結合
+    .new-from-this = これから新規作成
+    .new-name = 新しい名前
+    .real-number = 実数
+    .whole-number = 整数
+    .select-table-button = 表を選択…
+    .starting-table = 開始表
+    .table-direction = 表の方向
+
+table-cells =
+    .borders-title = セルの枠線
+    .contents-title = セルの内容
+    .line = 線
+    .lineweight = 線の太さ
+    .linetype = 線種
+    .color = 色
+    .double = 二重線
+    .spacing = 間隔
+    .apply-to = 適用先
+    .all = すべて
+    .outside = 外側
+    .inside = 内側
+    .none = なし
+    .top = 上
+    .bottom = 下
+    .left = 左
+    .right = 右
+    .inside-horizontal = 内側の水平
+    .inside-vertical = 内側の垂直
+    .contents = 内容
+    .empty = セルは空です。
+    .move-up = 上へ移動
+    .move-down = 下へ移動
+    .delete = 削除
+    .layout = レイアウト
+    .flow = 流し込み
+    .stack-horizontal = 水平に積み重ね
+    .stack-vertical = 垂直に積み重ね
+    .content-spacing = 間隔
+    .block-item = ブロック: { $name }
+    .text-item = 文字: { $text }
+    .text-content = 表のセルの文字
+    .borders-help = 選択したセルの枠線の線の太さ、線種、色を設定します。適用する辺を選択してください。
+    .contents-help = 選択したセルの内容を並べ替え、削除、配置します。
+    .block-title = セルのブロック
+    .format-title = セルのデータ書式
+    .block = ブロック
+    .block-name = 名前
+    .browse = 参照...
+    .block-path = パス
+    .placement = 配置
+    .alignment = セルの位置合わせ
+    .scale = 尺度
+    .autofit = 自動調整
+    .rotation = 回転角度
+    .format = 書式
+    .current-precision = 現在の精度
+    .precision = 精度
+    .symbol = 記号
+    .append-symbol = 記号を後ろに付ける
+    .negative-parens = 負の値を括弧で囲む
+    .list-separator = リスト区切り
+    .date-format = 日付の書式
+    .no-format-settings = このデータ型には書式設定がありません。
+    .data-type = データ型
+    .format-settings = 書式
+    .currency = 通貨
+    .decimal-number = 10 進数
+    .percentage = パーセント
+    .whole-number = 整数
+    .grads = グラード
+    .sample-text = サンプル文字
+    .block-help = 選択したセルにブロックを配置します: 位置、尺度 (またはセルに合わせる)、回転。
+    .format-help = 選択したセルの値を読み取るデータ型と書式を設定します。
+    .additional-format = 追加の書式
+    .conversion = 換算係数
+    .prefix = 接頭辞
+    .suffix = 接尾辞
+    .decimal-separator = 小数点の区切り
+    .thousands-separator = 桁区切り
+    .space = スペース
+    .separator-none = (なし)
+    .zero-leading = 先頭のゼロ
+    .zero-trailing = 末尾のゼロ
+    .zero-feet = 0 フィート
+    .zero-inches = 0 インチ
+    .warning-title = データ型が一致しません
+    .warning-heading = これらのセルには、選択したデータ型ではない値が含まれています。
+    .warning-note = 変換すると各値を新しい型として読み取ります。読み取れない値は消去されます。キャンセルするとセルは変更されません。
+    .warning-ok = 変換
+    .warning-cancel = キャンセル
+
+parameters-manager =
+    .action-parameters = アクションパラメーター
+    .filter = 名前*
+    .search = パラメーターを検索
+    .order = 順序
+    .polar = 極座標
+    .visibility = 可視性
+    .variable = 変数
+    .footer = すべて: { $total } 個中 { $shown } 個のパラメーターを表示
+
+parameters-manager-feedback =
+    .no-number = この行には編集できる数値がありません。
+    .no-flag = この行には変更できる表示フラグがありません。
+    .finite-number = 有限の数値パラメーター値を指定してください。
+    .stale-session = ブロックエディターのセッションは有効ではなくなりました。
+    .positive-length = 正のパラメーター長を指定してください。
+    .no-direction = パラメーターの方向を取得できません。
+    .history = パラメーター管理を編集
+
+block-action-targets =
+    .prompt = BACTIONSET  オブジェクトを選択するか、Parameter に続けて点の名前を入力し、Enter を押してください (Parameter "…"):
+    .create-prompt = BACTION  オブジェクトを選択するか、Parameter に続けて点の名前を入力し、Enter を押してください (Parameter "…"):
+    .unique-point = 一意の点パラメーター名を入力してください。
+    .empty = アクションには少なくとも1つの対象が必要です。
+    .invalid = このブロックに属するサポート対象を選択してください。
+    .stale = アクションまたはブロックエディターのセッションが変更されました。BACTIONSET を再実行してください。
+    .create-stale = アクションまたはブロックエディターのセッションが変更されました。BACTION を再実行してください。

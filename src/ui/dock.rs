@@ -109,6 +109,8 @@ pub enum PanelId {
     Pi,
     /// Block Editor authoring tools.
     AuthoringPalettes,
+    /// The Block Editor's Parameters Manager.
+    ParametersManager,
     ExternalReferences,
     /// Outline of the drawing's origin planes, open sketch and solid bodies.
     Browser,
@@ -132,12 +134,13 @@ pub enum PanelId {
 
 impl PanelId {
     /// Every panel, in the order the pallet menu lists them.
-    pub const ALL: [PanelId; 14] = [
+    pub const ALL: [PanelId; 15] = [
         PanelId::Properties,
         PanelId::GraphicAttributes,
         PanelId::BlockPalette,
         PanelId::Pi,
         PanelId::AuthoringPalettes,
+        PanelId::ParametersManager,
         PanelId::ExternalReferences,
         PanelId::Browser,
         PanelId::NodeGraph,
@@ -157,6 +160,7 @@ impl PanelId {
             PanelId::BlockPalette => "Block Palette",
             PanelId::Pi => crate::pi::panel_title(),
             PanelId::AuthoringPalettes => "Authoring Palettes",
+            PanelId::ParametersManager => "Parameters Manager",
             PanelId::ExternalReferences => "External References",
             PanelId::Browser => "Browser",
             PanelId::NodeGraph => "Node Graph",
@@ -180,6 +184,7 @@ impl PanelId {
             PanelId::BlockPalette => include_bytes!("../../assets/icons/blocks/insert.svg"),
             PanelId::Pi => crate::ui::icons::MENU,
             PanelId::AuthoringPalettes => include_bytes!("../../assets/icons/tool_palettes.svg"),
+            PanelId::ParametersManager => include_bytes!("../../assets/icons/table.svg"),
             PanelId::ExternalReferences => crate::ui::icons::FOLDER_OPEN,
             PanelId::Browser => include_bytes!("../../assets/icons/content_browser.svg"),
             PanelId::NodeGraph => crate::ui::icons::NODE_GRAPH,
@@ -194,13 +199,14 @@ impl PanelId {
     }
 
     /// Default dock width for a freshly-created panel instance.
-    fn default_width(self) -> f32 {
+    pub(crate) fn default_width(self) -> f32 {
         match self {
             PanelId::Properties => 250.0,
             PanelId::GraphicAttributes => 250.0,
             PanelId::BlockPalette => 260.0,
             PanelId::Pi => 340.0,
             PanelId::AuthoringPalettes => 260.0,
+            PanelId::ParametersManager => 420.0,
             PanelId::ExternalReferences => 460.0,
             PanelId::Browser => 230.0,
             PanelId::NodeGraph => 220.0,
@@ -1211,9 +1217,9 @@ pub fn title_bar_with<'a>(
             None => Space::new().width(0).height(0).into(),
         };
     }
-    // The pallet's control, pin and close only show while the pointer is
-    // over the bar; the fixed height keeps the bar from jumping when they
-    // appear.
+    // The pallet's control and pin only show while the pointer is over the
+    // bar; close always shows. The fixed height keeps the bar from jumping
+    // when they appear.
     let mut bar = row![text(title).size(12), Space::new().width(Length::Fill)]
         .spacing(3)
         .height(Length::Fixed(TITLE_BUTTON_H))
@@ -1222,14 +1228,13 @@ pub fn title_bar_with<'a>(
         if let Some(extra) = extra {
             bar = bar.push(extra);
         }
-        bar = bar
-            .push(pin_button(
-                id,
-                chrome.auto_collapse,
-                tooltip::Position::Bottom,
-            ))
-            .push(close_button(id, tooltip::Position::Bottom));
+        bar = bar.push(pin_button(
+            id,
+            chrome.auto_collapse,
+            tooltip::Position::Bottom,
+        ));
     }
+    bar = bar.push(close_button(id, tooltip::Position::Bottom));
     mouse_area(
         container(bar)
             .style(|theme: &Theme| container::Style {

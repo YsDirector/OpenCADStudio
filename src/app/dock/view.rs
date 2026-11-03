@@ -69,8 +69,11 @@ impl OpenCADStudio {
                 let checked: Vec<_> = crate::ui::dock::PanelId::ALL
                     .iter()
                     .filter(|p| {
-                        **p != crate::ui::dock::PanelId::AuthoringPalettes
-                            || tab.active_block_edit_session().is_some()
+                        !matches!(
+                            **p,
+                            crate::ui::dock::PanelId::AuthoringPalettes
+                                | crate::ui::dock::PanelId::ParametersManager
+                        ) || tab.active_block_edit_session().is_some()
                     })
                     .map(|p| {
                         let here = self.dock.location(*p).map(|(s, _)| s) == Some(side);
@@ -481,6 +484,25 @@ impl OpenCADStudio {
                     self.action_error(Some(crate::scene::block_actions::Kind::PolarStretch)),
                     self.action_error(Some(crate::scene::block_actions::Kind::Array)),
                     self.parameter_placement_error("LINEAR"),
+                )
+            }
+            crate::ui::dock::PanelId::ParametersManager => {
+                let (definition, rows) = match tab.active_block_edit_session() {
+                    Some(session) => (
+                        session.br_handle,
+                        crate::scene::block_parameters_manager::rows(
+                            &tab.scene.document,
+                            session.br_handle,
+                        ),
+                    ),
+                    None => (codec::Handle::NULL, Vec::new()),
+                };
+                crate::ui::window::parameters_manager::view(
+                    &rows,
+                    &tab.parameters_panel,
+                    definition,
+                    width,
+                    chrome,
                 )
             }
             crate::ui::dock::PanelId::BlockPalette => {

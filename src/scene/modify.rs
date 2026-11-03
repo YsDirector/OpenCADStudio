@@ -687,6 +687,14 @@ impl Scene {
             EntityType::Insert(ins) => {
                 for att in ins.attributes.iter_mut() {
                     att.common.handle = doc.allocate_handle();
+                    // The text of a multiline attribute is an object of its
+                    // own inside the reference, so the copy needs a fresh
+                    // handle for it and its new attribute as owner.
+                    let owner = att.common.handle;
+                    if let Some(model) = &mut att.embedded_mtext {
+                        model.common.handle = doc.allocate_handle();
+                        model.common.owner_handle = owner;
+                    }
                 }
                 if ins.seqend_handle.is_some() {
                     ins.seqend_handle = Some(doc.allocate_handle());
@@ -1276,6 +1284,7 @@ impl Scene {
             self.ensure_image_definition(&mut entity);
             let h = self.document.add_entity(entity).unwrap_or(Handle::NULL);
             if !h.is_null() {
+                Self::adopt_attributes(&mut self.document, h);
                 // Deep-clone the extension-dictionary tree so edits on the
                 // copy never touch the source. A dangling or missing root
                 // leaves the copy without one — never shared.
@@ -1427,6 +1436,26 @@ impl Scene {
         self.copy_complete_groups(&handle_map);
         self.copy_dimension_associations(&handle_map);
         self.copy_hatch_associations(&handle_map);
+        // A copied associative array gets its own blocks and action, so
+        // editing one array leaves the other alone.
+        let arrays: Vec<(Handle, Handle)> = handle_map
+            .iter()
+            .filter(|(source, _)| {
+                self.document.get_entity(**source).is_some_and(|entity| {
+                    matches!(entity, EntityType::Insert(_))
+                        && entity.common().reactors.iter().any(|reactor| {
+                            matches!(
+                                self.document.objects.get(reactor),
+                                Some(codec::objects::ObjectType::Associative(_))
+                            )
+                        })
+                })
+            })
+            .map(|(&source, &copy)| (source, copy))
+            .collect();
+        for (source, copy) in arrays {
+            super::assoc_array::clone_array_for_copy(self, source, copy, &handle_map);
+        }
         // The copies are new handles (natural memo misses, tessellated fresh)
         // and reference only already-cached blocks — no block defn changes.
         // Report them as additions so derived caches patch in exactly the copies.

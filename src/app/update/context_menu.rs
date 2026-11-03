@@ -73,8 +73,8 @@ impl OpenCADStudio {
                 .cloned()
                 .collect(),
             clipboard_nonempty: !self.clipboard.is_empty(),
-            undo_label: tab.history.undo_stack.last().map(|s| s.label().to_string()),
-            redo_label: tab.history.redo_stack.last().map(|s| s.label().to_string()),
+            undo_label: tab.history.undo_stack.last().map(|s| s.display_label().into_owned()),
+            redo_label: tab.history.redo_stack.last().map(|s| s.display_label().into_owned()),
             props_open: self.show_properties,
         }
     }
@@ -142,9 +142,12 @@ impl OpenCADStudio {
             // right-click cycle: the next right-click acts as Enter again.
             sel.input.right_click_entered = false;
         }
-        // Select Similar finishes a canvas selection, not a command prompt.
+        // The selection rows finish a canvas selection, not a command prompt.
         // An empty focused command input captures the following Ctrl+C.
-        let focus = if matches!(action, MenuAction::SelectSimilar) {
+        let focus = if matches!(
+            action,
+            MenuAction::SelectSimilar | MenuAction::InvertSelection | MenuAction::DeselectAll
+        ) {
             self.unfocus_widgets()
         } else {
             self.focus_cmd_input()

@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = Угол наклона
+    .reset-to-style = Вернуть значение стиля (__ocs_fmt_0__)
+    .new-text-style = Новый стиль текста
+    .new-style-from-selection = Новый стиль из выделения…
+    .update-style-from-selection = Обновить «__ocs_fmt_0__» из выделения
+    .text-style-manager-dialog = Диспетчер стилей текста…
+    .style-updated = Стиль __ocs_fmt_0__ обновлён.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = Строка меню
     .ribbon-tab = Вкладка ленты
     .no-matches = Нет подходящих команд
+    .switch-windows = Переключить окна
+    .center-layer = Слой осевых линий
+    .user-interface = Пользовательский интерфейс
+    .no-open-drawings = Нет открытых чертежей
+    .viewcube = ViewCube
+    .ucs-icon = Знак ПСК
+    .file-tabs = Вкладки файлов
+    .layout-tabs = Вкладки листов
+    .command-line = Командная строка
+    .status-bar = Строка состояния
+    .customize-qat = Настроить панель быстрого доступа
+    .more-commands = Другие команды…
+    .more-commands-title = Добавить команду на панель быстрого доступа
+    .find-command-to-add = Введите команду для добавления
+    .show-below = Показать под лентой
+    .show-above = Показать над лентой
+    .qat-place-unavailable = Недоступно, пока лента закрыта
+    .qat-new = Создать
+    .qat-open = Открыть
+    .qat-save = Сохранить
+    .qat-save-as = Сохранить как
+    .qat-plot = Печать
+    .qat-undo = Отменить
+    .qat-redo = Повторить
+    .qat-measure = Измерить
+    .qat-batch-plot = Пакетная печать
+    .qat-match-properties = Копировать свойства
+    .qat-plot-preview = Предварительный просмотр
+    .qat-properties = Свойства
+    .add-to-qat = Добавить на панель быстрого доступа
+    .remove-from-qat = Удалить с панели быстрого доступа
+    .add-separator = Добавить разделитель
+    .remove-separator = Удалить разделитель
+    .qat-show-below = Показать панель быстрого доступа под лентой
+    .qat-show-above = Показать панель быстрого доступа над лентой
+    .return-to-ribbon = Вернуть на ленту
+    .float-title-side = Заголовок панели сбоку, дополнительные инструменты открываются вправо
+    .float-title-bottom = Заголовок панели внизу, дополнительные инструменты открываются вниз
+    .floating-suffix = {" "}(плавающая)
 
 options =
     .language-section = Язык
@@ -3535,6 +3581,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: изолированный слой (слои) __ocs_fmt_0__.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: слои не были изолированы командой LAYISO.
     .laymatch-select-objects-to-change-layer = LAYMATCH Выберите объекты для изменения слоя:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Выберите объекты для копирования:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Выберите объект на целевом слое:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH Выберите объект источника для соответствия слою из:
@@ -3556,6 +3605,7 @@ layers =
     .layer-s-frozen = Слой(ы) заморожен.
     .layer-s-locked = Слои заблокированы.
     .layer-s-turned-off = Слой(ы) выключен(ы).
+    .layoff-select-object-on-layer-undo = LAYOFF  Выберите объект на слое, который нужно отключить, или [Undo]:
     .layer-s-unlocked = Слой(ы) незапертый.
     .layers = Слои: __ocs_fmt_0__
     .lock = Замок
@@ -3931,6 +3981,84 @@ annotate =
     .text-specify-rotation-angle = TEXT  Укажите угол поворота <__ocs_fmt_0__>:
     .text-specify-second-endpoint = TEXT  { common.specify }: { common.endpoint-2 }:
     .tolerance-specify-insertion-point = TOLERANCE Укажите точку вставки:
+    .tcell-row-above =
+        Вставить строку
+        выше
+    .tcell-row-below =
+        Вставить строку
+        ниже
+    .tcell-delete-rows =
+        Удалить
+        строки
+    .tcell-col-left =
+        Вставить столбец
+        слева
+    .tcell-col-right =
+        Вставить столбец
+        справа
+    .tcell-delete-cols =
+        Удалить
+        столбцы
+    .tcell-merge =
+        Объединить
+        ячейки
+    .tcell-unmerge =
+        Разделить
+        ячейки
+    .tcell-lock =
+        Блокировка
+        ячейки
+    .tcell-edit =
+        Редактировать
+        текст
+    .tcell-match =
+        Копировать
+        свойства
+    .tcell-borders =
+        Границы
+        ячейки
+    .tcell-format =
+        Формат
+        данных
+    .tcell-block =
+        Вставить
+        блок
+    .tcell-field =
+        Вставить
+        поле
+    .tcell-contents =
+        Содержимое
+        ячейки
+    .tcell-link =
+        Связать
+        ячейку
+    .tcell-download =
+        Загрузить
+        из источника
+    .tcell-row-style = Стиль строки
+    .tcell-column-style = Стиль столбца
+    .tcell-width = Ширина ячейки
+    .tcell-height = Высота ячейки
+    .tcell-border-color = Цвет границы
+    .tcell-border-lineweight = Толщина линий границы
+    .tcell-border-linetype = Тип линии границы
+    .tcell-locking = Блокировка ячейки
+    .tcell-data-link = Связь данных ячейки
+    .tcell-select-destination = Выберите целевую ячейку:
+    .tcell-select-cell = Выберите ячейку таблицы:
+    .tcell-range-first = Выберите первый угол диапазона ячеек таблицы:
+    .tcell-range-second = Выберите второй угол диапазона ячеек таблицы:
+    .tcell-align-prompt = Введите выравнивание ячейки [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Введите формат данных [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Введите имя блока или [?]:
+    .tcell-formula-prompt = Введите формулу [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = По строке/столбцу
+    .tcell-unlocked = Разблокирована
+    .tcell-content-locked = Содержимое заблокировано
+    .tcell-format-locked = Формат заблокирован
+    .tcell-content-format-locked = Содержимое и формат заблокированы
+    .tcell-not-linked = Не связана
+    .tcell-invalid-cell = Недопустимая ячейка.
 
 insert =
     .pastespec-specify-insertion-point = PASTESPEC  Укажите точку вставки:
@@ -6529,9 +6657,57 @@ dimstyle =
     .move-text-outside-first = Сначала вынести текст
     .period = Точка
     .space = Пробел
+    .separator-none = (Нет)
     .surveyors-units = Геодезические единицы
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = В этом чертеже
+    .stroke-fonts-shx = Штриховые шрифты (SHX)
+    .font-folders = Папки шрифтов
+    .truetype-fonts = Шрифты TrueType
+    .font-missing-drawn-with = отсутствует · отрисован шрифтом __ocs_fmt_0__
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = Использовать «__ocs_fmt_0__»
+    .face-regular = Обычный
+    .face-bold-italic = Полужирный курсив
+    .font-style = Начертание
+    .truetype-fonts-only = Только для шрифтов TrueType
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Обновляется 1 текст, следующий стилю.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Обновляются тексты, следующие стилю: __ocs_fmt_3__.
+    .style-update-in-blocks = В определениях блоков: __ocs_fmt_0__.
+    .style-update-keeps-one = 1 текст с собственным значением сохраняет его.
+    .style-update-keeps-many = Тексты с собственным значением, которые сохраняют его: __ocs_fmt_0__.
+    .style-update-xref-undo = Тексты во внешних ссылках не изменяются. Один шаг отмены вместе с изменением стиля.
+    .rename-hint = Дважды щёлкните имя, чтобы переименовать его.
+    .modified-was = Изменено · было __ocs_fmt_0__
+    .height-asked-hint = 0 = высота запрашивается при размещении текста.
+    .annotative-paper-hint = Вкл.: высота выше — это высота на бумаге.
+    .backward-hint = «Справа налево» и «Перевёрнутый» влияют на однострочный текст и атрибуты, но не на MTEXT.
+    .on-apply = При применении
+    .sample-text = Образец текста
+    .where-used = Где используется
+    .kind-single-line-text = Однострочный текст
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Определения атрибутов
+    .no-texts-use-style = Этот стиль не использует ни один текст.
+    .inside-one-block = Из них __ocs_fmt_0__ в 1 определении блока.
+    .inside-blocks = Из них __ocs_fmt_0__ в определениях блоков: __ocs_fmt_1__.
+    .used-by-one-text = используется 1 текстом
+    .used-by-texts = используется текстами: __ocs_fmt_0__
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = Импорт стилей
     .select-drawing-to-import-styles-from = Выберите чертёж для импорта стилей
     .select-the-styles-to-import = Выберите стили для импорта
@@ -8027,3 +8203,281 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Число элементов
+    .row-count = Число рядов
+    .row-and-column-count = Число рядов и столбцов
+    .item-count = Число элементов
+    .angle-between-items = Угол между элементами
+    .prompt-columns = Укажите число столбцов (Ctrl: общий шаг столбцов):
+    .prompt-rows = Укажите число рядов (Ctrl: общий шаг рядов):
+    .prompt-rows-columns = Укажите число рядов и столбцов:
+    .prompt-items = Укажите число элементов (Ctrl: угол заполнения или общий шаг):
+    .prompt-column-spacing = Укажите расстояние между столбцами:
+    .prompt-row-spacing = Укажите расстояние между рядами:
+    .prompt-item-spacing = Укажите расстояние между элементами:
+    .prompt-item-angle = Укажите угол между элементами:
+    .prompt-radius = Укажите радиус:
+block-chain =
+    .label = Цепочка действий
+    .cycle = Цепочка действий блока содержит цикл.
+
+block-action-bars =
+    .requires-session = Для BACTIONBAR требуется активный сеанс редактора блоков.
+    .enable-display = Установите BACTIONBARMODE в 1 для отображения панелей операций.
+    .parameters-changed = Список параметров изменён; запустите BACTIONBAR заново.
+    .display-updated = Отображение панелей операций обновлено.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Выберите параметр, введите его имя или [All] <Выбранный>:
+    .prompt-all = BACTIONBAR  Выберите параметр, введите его имя или [All] <All>:
+    .choose-mode = Выберите Show, Hide или Reset.
+    .unique-parameter = Введите уникальное имя параметра, укажите его конечную точку или выберите All.
+    .enter-parameter = Введите имя параметра или выберите All.
+    .pick-endpoint = Укажите конечную точку параметра или выберите All.
+
+block-construction =
+    .requires-session = BCONSTRUCTION доступна только в редакторе блоков.
+    .choose-operation = Выберите Convert, Revert, Show или Hide.
+    .stale-session = Сеанс редактора блоков для вспомогательной геометрии больше не активен.
+    .changed-count = Изменено геометрических объектов: __ocs_fmt_0__.
+    .prompt-selection = BCONSTRUCTION  Выберите геометрию или [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  Выберите [Convert/Revert] <Convert> или нажмите Enter для применения выбранной операции:
+    .revert = Восстановить
+    .history = Редактировать вспомогательную геометрию
+    .unsupported-record = Эта запись вспомогательной геометрии имеет неподдерживаемую версию или значение.
+    .open-definition = Откройте определение блока перед редактированием вспомогательной геометрии.
+    .missing-object = Выбранный объект вспомогательной геометрии больше недоступен.
+    .active-geometry = Выберите геометрию в активном определении блока.
+    .locked-layer = Вспомогательную геометрию нельзя изменить на заблокированном слое.
+    .revert-layer = Выберите существующий разблокированный слой для восстановленной геометрии.
+
+block-authoring-history =
+    .alignment-type = Тип выравнивания
+    .action-override = Редактировать переопределение операции блока
+    .action-chain = Редактировать цепочку операций блока
+    .action-base = Редактировать базовую точку операции блока
+    .parameter-chain = BEDIT Связывание операций параметра
+    .value-set = BEDIT Набор значений параметра
+    .parameter-metadata = Редактировать метаданные параметра блока
+    .authoring-grip = Ручка создания блока
+
+block-operation-history =
+    .reset-references = Сбросить вхождения блока
+    .associate-action = Связать операцию блока
+    .action-selection = Набор выбора операции
+    .test-parameter = Параметр тестового блока
+    .reference-parameter = Параметр вхождения блока
+    .align-reference = Выровнять вхождение блока
+    .insertion-grip-order = Изменить порядок ручек вставки
+    .move-grip = Переместить собственную ручку блока
+    .configure-grips = Настроить ручки параметров блока
+    .lookup-tables = Таблицы выбора
+    .hyperlink = Гиперссылка блока
+    .properties = Свойства блока
+    .properties-table = Таблица свойств блока
+    .visibility-state = Состояние видимости
+    .visibility-states = Состояния видимости
+
+block-formatted-history =
+    .action = Операция { $label }
+    .parameter = Параметр { $label }
+    .edit-block = Редактировать блок { $label }
+    .save-block = Сохранить блок как { $label }
+    .delete-block = Удалить блок { $label }
+
+block-history-kinds =
+    .flip = Отражение
+    .polar-stretch = Полярное растяжение
+    .basepoint = Базовая точка
+    .lookup = Выбор
+
+block-action-properties =
+    .base-point = Базовая точка операции
+    .overrides = Переопределения операции
+    .multiplier = Множитель расстояния
+    .angle-offset = Смещение угла (градусы)
+    .chain = Цепочка операций
+    .chain-to = Связать с
+
+block-parameter-properties =
+    .show-properties = Показывать в свойствах
+    .parameter-name = Имя параметра
+    .grip-count = Количество ручек
+    .dependent-base = Зависимая базовая точка
+    .offset-x = Смещение базы X
+    .offset-y = Смещение базы Y
+    .base-grip = Положение базовой ручки
+    .end-grip = Положение конечной ручки
+    .x-grip = Положение ручки X
+    .y-grip = Положение ручки Y
+
+block-value-set =
+    .use-min = Использовать минимум для { $label }
+    .use-max = Использовать максимум для { $label }
+    .use-increment = Использовать шаг для { $label }
+    .use-list = Использовать список допустимых значений для { $label }
+    .min = Минимум для { $label }
+    .max = Максимум для { $label }
+    .increment = Шаг для { $label }
+    .values = Допустимые значения для { $label }
+    .title = Набор значений
+    .x-distance = Расстояние X
+    .y-distance = Расстояние Y
+
+table-style-cells =
+    .tbl-start-from-style = Начать со стиля таблицы
+    .tbl-extra-columns = Дополнительные столбцы
+    .tbl-extra-rows = Дополнительные строки
+    .tbl-keep-from-template = Сохранить из исходной таблицы:
+    .tbl-keep-label-text = Текст ячеек меток
+    .tbl-keep-data-text = Текст ячеек данных
+    .tbl-keep-overrides = Переопределения стиля ячеек
+    .tbl-keep-links = Связи данных
+    .tbl-keep-fields = Поля
+    .tbl-keep-formulas = Формулы
+    .tbl-extra-whole = Число дополнительных строк и столбцов должно быть целым.
+    .from-style-insertion = __ocs_arg_n__  Укажите точку вставки или [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Введите имя стиля таблицы или [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Введите число дополнительных строк <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Введите число дополнительных столбцов <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Введите параметр вставки [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  Включить __ocs_arg_what__ во вставляемую таблицу? [Yes/No] <__ocs_arg_current__>:
+    .label-text = текст меток
+    .data-text = текст данных
+    .formulas = формулы
+    .fields = поля
+    .data-links = связи данных
+    .blocks = блоки
+    .cell-style-overrides = переопределения стиля ячеек
+    .style-name-header = Имя стиля таблицы
+    .no-starting-table = Стиль таблицы не содержит таблицы.
+    .select-table = Выберите таблицу:
+    .not-a-table = Объект не является таблицей.
+    .cell-style-exists = Стиль ячеек с таким именем уже существует.
+    .cell-style-in-use = Стиль ячеек используется и не может быть удален.
+    .template-size = __ocs_arg_rows__ строк × __ocs_arg_columns__ столбцов
+    .cell-properties = Свойства ячейки
+    .cell-text = Текст ячейки
+    .cell-borders = Границы ячейки
+    .cell-styles = Стили ячеек
+    .label = Метка
+    .margins = Поля
+    .merge-on-create = Объединять ячейки при создании строки/столбца
+    .new-from-this = Новый на основе этого
+    .new-name = Новое имя
+    .real-number = Вещественное число
+    .whole-number = Целое число
+    .select-table-button = Выбрать таблицу…
+    .starting-table = Исходная таблица
+    .table-direction = Направление таблицы
+
+table-cells =
+    .borders-title = Границы ячейки
+    .contents-title = Содержимое ячейки
+    .line = Линия
+    .lineweight = Толщина линий
+    .linetype = Тип линии
+    .color = Цвет
+    .double = Двойная линия
+    .spacing = Интервал
+    .apply-to = Применить к
+    .all = Все
+    .outside = Внешние
+    .inside = Внутренние
+    .none = Нет
+    .top = Верхняя
+    .bottom = Нижняя
+    .left = Левая
+    .right = Правая
+    .inside-horizontal = Внутренние горизонтальные
+    .inside-vertical = Внутренние вертикальные
+    .contents = Содержимое
+    .empty = Ячейка пуста.
+    .move-up = Вверх
+    .move-down = Вниз
+    .delete = Удалить
+    .layout = Расположение
+    .flow = Поток
+    .stack-horizontal = Горизонтально друг за другом
+    .stack-vertical = Вертикально друг под другом
+    .content-spacing = Интервал
+    .block-item = Блок: { $name }
+    .text-item = Текст: { $text }
+    .text-content = Текст ячейки таблицы
+    .borders-help = Задает толщину линий, тип линии и цвет границ выбранных ячеек; выберите, к каким краям они применяются.
+    .contents-help = Упорядочивает, удаляет и размещает содержимое выбранной ячейки.
+    .block-title = Блок ячейки
+    .format-title = Формат данных ячейки
+    .block = Блок
+    .block-name = Имя
+    .browse = Обзор...
+    .block-path = Путь
+    .placement = Размещение
+    .alignment = Выравнивание ячейки
+    .scale = Масштаб
+    .autofit = Автоподбор
+    .rotation = Угол поворота
+    .format = Формат
+    .current-precision = Текущая точность
+    .precision = Точность
+    .symbol = Символ
+    .append-symbol = Символ после числа
+    .negative-parens = Отрицательные в скобках
+    .list-separator = Разделитель списка
+    .date-format = Формат даты
+    .no-format-settings = У этого типа данных нет параметров формата.
+    .data-type = Тип данных
+    .format-settings = Формат
+    .currency = Денежный
+    .decimal-number = Десятичное число
+    .percentage = Процентный
+    .whole-number = Целое число
+    .grads = Грады
+    .sample-text = пример текста
+    .block-help = Помещает блок в выбранные ячейки: его положение, масштаб (или подгонку по ячейке) и поворот.
+    .format-help = Задает тип данных и формат, в котором читаются значения выбранных ячеек.
+    .additional-format = Дополнительный формат
+    .conversion = Коэффициент преобразования
+    .prefix = Префикс
+    .suffix = Суффикс
+    .decimal-separator = Десятичный разделитель
+    .thousands-separator = Разделитель тысяч
+    .space = Пробел
+    .separator-none = (Нет)
+    .zero-leading = Ведущие нули
+    .zero-trailing = Замыкающие нули
+    .zero-feet = 0 футов
+    .zero-inches = 0 дюймов
+    .warning-title = Тип данных не совпадает
+    .warning-heading = Эти ячейки содержат значения, не относящиеся к выбранному типу данных.
+    .warning-note = При преобразовании каждое значение читается как новый тип; значение, которое так прочитать нельзя, очищается. Отмена оставляет ячейки без изменений.
+    .warning-ok = Преобразовать
+    .warning-cancel = Отмена
+
+parameters-manager =
+    .action-parameters = Параметры операций
+    .filter = Имя*
+    .search = Поиск параметра
+    .order = Порядок
+    .polar = Полярный
+    .visibility = Видимость
+    .variable = Переменная
+    .footer = Все: показано { $shown } из { $total } параметров
+
+parameters-manager-feedback =
+    .no-number = В этой строке нет числа для редактирования.
+    .no-flag = В этой строке нет изменяемого признака видимости.
+    .finite-number = Укажите конечное числовое значение параметра.
+    .stale-session = Сеанс редактора блоков больше не активен.
+    .positive-length = Укажите положительную длину параметра.
+    .no-direction = Направление параметра недоступно.
+    .history = Изменение в диспетчере параметров
+
+block-action-targets =
+    .prompt = BACTIONSET  Выберите объекты или введите Parameter и имя точки, затем нажмите Enter (Parameter "…"):
+    .create-prompt = BACTION  Выберите объекты или введите Parameter и имя точки, затем нажмите Enter (Parameter "…"):
+    .unique-point = Введите уникальное имя точечного параметра.
+    .empty = Для операции требуется хотя бы один объект.
+    .invalid = Выберите поддерживаемые объекты, принадлежащие этому блоку.
+    .stale = Операция или сеанс редактора блоков изменились; запустите BACTIONSET заново.
+    .create-stale = Операция или сеанс редактора блоков изменились; запустите BACTION заново.

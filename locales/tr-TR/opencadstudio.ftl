@@ -45,6 +45,13 @@ mtext-object-origin = MTEXT
     .style = By style
     .custom = Custom
     .mixed = Mixed
+    .oblique = Eğiklik açısı
+    .reset-to-style = Stile sıfırla (__ocs_fmt_0__)
+    .new-text-style = Yeni metin stili
+    .new-style-from-selection = Seçimden yeni stil…
+    .update-style-from-selection = "__ocs_fmt_0__" stilini seçimden güncelle
+    .text-style-manager-dialog = Metin Stili Yöneticisi…
+    .style-updated = '__ocs_fmt_0__' stili güncellendi.
 
 mtext-commit-errors = MTEXT
     .numeric = MTEXT: enter a valid height, width factor and rotation before saving.
@@ -196,6 +203,45 @@ ribbon-menu =
     .menu-bar = Menü Çubuğu
     .ribbon-tab = Şerit Sekmesi
     .no-matches = Eşleşen komut yok
+    .switch-windows = Pencereleri değiştir
+    .center-layer = Merkez çizgisi katmanı
+    .user-interface = Kullanıcı arayüzü
+    .no-open-drawings = Açık çizim yok
+    .viewcube = ViewCube
+    .ucs-icon = KKS simgesi
+    .file-tabs = Dosya sekmeleri
+    .layout-tabs = Yerleşim sekmeleri
+    .command-line = Komut satırı
+    .status-bar = Durum çubuğu
+    .customize-qat = Hızlı Erişim Araç Çubuğunu özelleştir
+    .more-commands = Diğer komutlar…
+    .more-commands-title = Hızlı Erişim Araç Çubuğuna komut ekle
+    .find-command-to-add = Eklenecek komutu yazın
+    .show-below = Şeridin altında göster
+    .show-above = Şeridin üstünde göster
+    .qat-place-unavailable = Şerit kapalıyken kullanılamaz
+    .qat-new = Yeni
+    .qat-open = Aç
+    .qat-save = Kaydet
+    .qat-save-as = Farklı kaydet
+    .qat-plot = Çizdir
+    .qat-undo = Geri al
+    .qat-redo = Yinele
+    .qat-measure = Ölç
+    .qat-batch-plot = Toplu çizdirme
+    .qat-match-properties = Özellikleri eşle
+    .qat-plot-preview = Çizim önizleme
+    .qat-properties = Özellikler
+    .add-to-qat = Hızlı Erişim Araç Çubuğuna ekle
+    .remove-from-qat = Hızlı Erişim Araç Çubuğundan kaldır
+    .add-separator = Ayırıcı ekle
+    .remove-separator = Ayırıcıyı kaldır
+    .qat-show-below = Hızlı Erişim Araç Çubuğunu şeridin altında göster
+    .qat-show-above = Hızlı Erişim Araç Çubuğunu şeridin üstünde göster
+    .return-to-ribbon = Şeride geri döndür
+    .float-title-side = Panel başlığı yanda, ek araçlar sağa açılır
+    .float-title-bottom = Panel başlığı altta, ek araçlar aşağı açılır
+    .floating-suffix = {" "}(kayan)
 
 options =
     .language-section = Dil
@@ -1522,11 +1568,11 @@ common =
     .current-cell = { common.cell } · { common.current }
     .row = Satır
     .column = Sütun
-    .cell-style = { common.cell }: { properties.style }
-    .cell-type = { common.cell }: { common.type }
+    .cell-style = Hücre stili
+    .cell-type = Hücre türü
     .content-color = { common.content }: { common.color }
     .data-format = { common.data } · { common.format }
-    .background-fill = { properties.background } · { properties.fill }
+    .background-fill = Arka plan dolgusu
     .left-margin = { common.margin } · { common.left }
     .top-margin = { common.margin } · { common.top }
     .right-margin = { common.margin } · { common.right }
@@ -2506,7 +2552,7 @@ common =
     .specify-point-or-enter-arc-length = Specify point or enter arc length:
     .specify-point-or-enter-radius = Specify point or enter radius:
     .specify-replacement-path-xref-path-find-old-new = Specify replacement path: XREF Path Find <old> <new>
-    .specify-second-point = Specify second point:
+    .specify-second-point = İkinci noktayı belirtin:
     .specify-the-shell-offset-distance = Specify the shell offset distance <__ocs_fmt_0__>:
     .specify-thickness = Specify thickness
     .specify-window = Pencereyi belirt
@@ -3514,6 +3560,9 @@ layers =
     .layiso-isolated-layer-s = LAYISO: __ocs_fmt_0__ katman izole edildi.
     .layuniso-no-layers-were-isolated-by-layiso = LAYUNISO: LAYISO ile yalıtılmış katman yok.
     .laymatch-select-objects-to-change-layer = LAYMATCH  Katmanı değiştirilecek nesneleri seçin:
+    .copytolayer-base = Specify base point or [Displacement/eXit] <eXit>:
+    .copytolayer-second = Specify second point of displacement or <use first point as displacement>:
+    .copytolayer-displacement = Specify displacement <0.0000,0.0000,0.0000>:
     .copytolayer-select-objects-to-copy = COPYTOLAYER  Kopyalanacak nesneleri seçin:
     .copytolayer-select-an-object-on-the-destination-layer = COPYTOLAYER  Hedef katmandaki bir nesneyi seçin:
     .laymatch-select-source-object-to-match-layer-f = LAYMATCH  Katmanı alınacak kaynak nesneyi seçin:
@@ -3535,6 +3584,7 @@ layers =
     .layer-s-frozen = Katmanlar donduruldu.
     .layer-s-locked = Katmanlar kilitlendi.
     .layer-s-turned-off = Katmanlar kapatıldı.
+    .layoff-select-object-on-layer-undo = LAYOFF  Kapatılacak katmandaki bir nesneyi seçin veya [Undo]:
     .layer-s-unlocked = Katmanların kilidi açıldı.
     .layers = Katmanlar: __ocs_fmt_0__
     .lock = Kilitle
@@ -3668,6 +3718,84 @@ layers =
     .lock-and-fade = Kilitle ve soldur
 
 annotate =
+    .tcell-row-above =
+        Üste
+        Satır Ekle
+    .tcell-row-below =
+        Alta
+        Satır Ekle
+    .tcell-delete-rows =
+        Satırları
+        Sil
+    .tcell-col-left =
+        Sola
+        Sütun Ekle
+    .tcell-col-right =
+        Sağa
+        Sütun Ekle
+    .tcell-delete-cols =
+        Sütunları
+        Sil
+    .tcell-merge =
+        Hücreleri
+        Birleştir
+    .tcell-unmerge =
+        Birleştirmeyi
+        Kaldır
+    .tcell-lock =
+        Hücre
+        Kilidi
+    .tcell-edit =
+        Metni
+        Düzenle
+    .tcell-match =
+        Hücreyi
+        Eşle
+    .tcell-borders =
+        Hücre
+        Kenarlıkları
+    .tcell-format =
+        Veri
+        Biçimi
+    .tcell-block =
+        Blok
+        Ekle
+    .tcell-field =
+        Alan
+        Ekle
+    .tcell-contents =
+        Hücre İçeriğini
+        Yönet
+    .tcell-link =
+        Hücreyi
+        Bağla
+    .tcell-download =
+        Kaynaktan
+        İndir
+    .tcell-row-style = Satır stili
+    .tcell-column-style = Sütun stili
+    .tcell-width = Hücre genişliği
+    .tcell-height = Hücre yüksekliği
+    .tcell-border-color = Kenarlık rengi
+    .tcell-border-lineweight = Kenarlık çizgi kalınlığı
+    .tcell-border-linetype = Kenarlık çizgi tipi
+    .tcell-locking = Hücre kilidi
+    .tcell-data-link = Hücre veri bağlantısı
+    .tcell-select-destination = Hedef hücreyi seçin:
+    .tcell-select-cell = Tablo hücresini seçin:
+    .tcell-range-first = Tablo hücre aralığının ilk köşesini seçin:
+    .tcell-range-second = Tablo hücre aralığının ikinci köşesini seçin:
+    .tcell-align-prompt = Hücre hizalamasını girin [TL/TC/TR/ML/MC/MR/BL/BC/BR]:
+    .tcell-format-prompt = Veri biçimini girin [Angle/Currency/Date/Decimal/General/Percentage/Point/Text/Whole]:
+    .tcell-block-prompt = Blok adını girin veya [?]:
+    .tcell-formula-prompt = Formül girin [Sum/Average/Count/Cell/Equation]:
+    .tcell-by-row-column = Satır/Sütuna göre
+    .tcell-unlocked = Kilitsiz
+    .tcell-content-locked = İçerik kilitli
+    .tcell-format-locked = Biçim kilitli
+    .tcell-content-format-locked = İçerik ve biçim kilitli
+    .tcell-not-linked = Bağlı değil
+    .tcell-invalid-cell = Geçersiz hücre.
     .dimoverride-invalid-override = DIMOVERRIDE: geçersiz geçersiz kılma "__ocs_fmt_0__".
     .dimoverride-no-dimensions = DIMOVERRIDE: düzenlenebilir ölçü seçilmedi.
     .dimoverride-updated = DIMOVERRIDE: __ocs_fmt_0__ ölçü güncellendi.
@@ -6451,9 +6579,57 @@ dimstyle =
     .move-text-outside-first = Önce metni dışarı taşı
     .period = Nokta
     .space = Boşluk
+    .separator-none = (Yok)
     .surveyors-units = Haritacılık birimleri
 
 style-manager =
+    .use-big-font = Use Big Font
+    .number-field-range = Use digits and a decimal point. Enter a value from __ocs_fmt_0__ to __ocs_fmt_1__.
+    .number-field-non-negative = Enter 0 or a positive number.
+    .number-field-angle = Must be between __ocs_fmt_0__° and __ocs_fmt_1__°.
+    .one-field-needs-fixing = 1 field needs fixing before Apply.
+    .fields-need-fixing = __ocs_fmt_0__ fields need fixing before Apply.
+    .in-this-drawing = Bu çizimde
+    .stroke-fonts-shx = Çizgi yazı tipleri (SHX)
+    .font-folders = Yazı tipi klasörleri
+    .truetype-fonts = TrueType yazı tipleri
+    .font-missing-drawn-with = eksik · __ocs_fmt_0__ ile çiziliyor
+    .turned-off-for-truetype = Turned off for the TrueType font: __ocs_fmt_0__.
+    .use-typed-font = “__ocs_fmt_0__” kullan
+    .face-regular = Normal
+    .face-bold-italic = Kalın İtalik
+    .font-style = Yazı tipi stili
+    .truetype-fonts-only = Yalnızca TrueType yazı tipleri
+    .style-update-one = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Stili izleyen 1 metin güncellenir.
+    .style-update-many = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__. Stili izleyen __ocs_fmt_3__ metin güncellenir.
+    .style-update-in-blocks = Blok tanımlarının içinde: __ocs_fmt_0__.
+    .style-update-keeps-one = Kendi değeri olan 1 metin onu korur.
+    .style-update-keeps-many = Kendi değeri olan __ocs_fmt_0__ metin onu korur.
+    .style-update-xref-undo = Dış referanslardaki metinler değiştirilmez. Stil değişikliğiyle birlikte tek bir geri alma adımı.
+    .rename-hint = Yeniden adlandırmak için bir ada çift tıklayın.
+    .modified-was = Değiştirildi · önceki __ocs_fmt_0__
+    .height-asked-hint = 0 = yükseklik metin yerleştirilirken sorulur.
+    .annotative-paper-hint = Açık: yukarıdaki yükseklik kâğıt yüksekliğidir.
+    .backward-hint = Geriye doğru ve Baş aşağı tek satırlı metni ve öznitelikleri etkiler, MTEXT’i etkilemez.
+    .on-apply = Uygulandığında
+    .sample-text = Örnek metin
+    .where-used = Kullanıldığı yerler
+    .kind-single-line-text = Tek satırlı metin
+    .kind-mtext = MTEXT
+    .kind-attribute-definitions = Öznitelik tanımları
+    .no-texts-use-style = Bu stili kullanan metin yok.
+    .inside-one-block = Bunların __ocs_fmt_0__ tanesi 1 blok tanımında.
+    .inside-blocks = Bunların __ocs_fmt_0__ tanesi __ocs_fmt_1__ blok tanımında.
+    .used-by-one-text = 1 metin kullanıyor
+    .used-by-texts = __ocs_fmt_0__ metin kullanıyor
+    .property-change = __ocs_fmt_0__: __ocs_fmt_1__ → __ocs_fmt_2__.
+    .property-change-other = Other stored settings of the style change.
+    .annotative-change-note = Existing texts keep their own setting; new texts take this one.
+    .style-redraw-one = 1 text that uses the style is redrawn; formatting set inside MTEXT stays.
+    .style-redraw-many = __ocs_fmt_0__ texts that use the style are redrawn; formatting set inside MTEXT stays.
+    .apply-count-one = 1 style, 1 property
+    .apply-count-one-style = 1 style, __ocs_fmt_0__ properties
+    .apply-count-many = __ocs_fmt_0__ styles, __ocs_fmt_1__ properties
     .import-styles = Stilleri İçe Aktar
     .select-drawing-to-import-styles-from = Stillerin İçe Aktarılacağı Çizimi Seçin
     .select-the-styles-to-import = İçe aktarılacak stilleri seçin
@@ -7738,6 +7914,52 @@ table-cmd =
     .lines = Satır
     .styles-in-use = Kullanılan stiller
 
+table-style-cells =
+    .tbl-start-from-style = Tablo stilinden başla
+    .tbl-extra-columns = Ek sütun
+    .tbl-extra-rows = Ek satır
+    .tbl-keep-from-template = Başlangıç tablosundan korunacaklar:
+    .tbl-keep-label-text = Etiket hücresi metni
+    .tbl-keep-data-text = Veri hücresi metni
+    .tbl-keep-overrides = Hücre stili geçersiz kılmaları
+    .tbl-keep-links = Veri bağlantıları
+    .tbl-keep-fields = Alanlar
+    .tbl-keep-formulas = Formüller
+    .tbl-extra-whole = Ek satır ve sütun sayısı tam sayı olmalıdır.
+    .from-style-insertion = __ocs_arg_n__  Ekleme noktasını belirtin veya [Style/Rows/Columns/Options]:
+    .from-style-name = __ocs_arg_n__  Tablo stilinin adını girin veya [?] <__ocs_arg_style__>:
+    .from-style-rows = __ocs_arg_n__  Ek satır sayısını girin <__ocs_arg_rows__>:
+    .from-style-columns = __ocs_arg_n__  Ek sütun sayısını girin <__ocs_arg_columns__>:
+    .from-style-options = __ocs_arg_n__  Bir ekleme seçeneği girin [Label text/Data text/Formulas/fIelds/data liNks/Blocks/cell style Overrides] <exit>:
+    .from-style-option = __ocs_arg_n__  Eklenen tabloya __ocs_arg_what__ dahil edilsin mi? [Yes/No] <__ocs_arg_current__>:
+    .label-text = etiket metni
+    .data-text = veri metni
+    .formulas = formüller
+    .fields = alanlar
+    .data-links = veri bağlantıları
+    .blocks = bloklar
+    .cell-style-overrides = hücre stili geçersiz kılmaları
+    .style-name-header = Tablo Stili Adı
+    .no-starting-table = Tablo stili bir tablo içermiyor.
+    .select-table = Bir tablo seçin:
+    .not-a-table = Nesne bir tablo değil.
+    .cell-style-exists = Bu adda bir hücre stili zaten var.
+    .cell-style-in-use = Hücre stili kullanımda, silinemez.
+    .template-size = __ocs_arg_rows__ satır × __ocs_arg_columns__ sütun
+    .cell-properties = Hücre Özellikleri
+    .cell-text = Hücre Metni
+    .cell-borders = Hücre Kenarlıkları
+    .cell-styles = Hücre stilleri
+    .label = Etiket
+    .margins = Kenar boşlukları
+    .merge-on-create = Satır/sütun oluşturulurken hücreleri birleştir
+    .new-from-this = Bundan yeni
+    .new-name = Yeni ad
+    .real-number = Gerçel sayı
+    .whole-number = Tam sayı
+    .select-table-button = Tablo seç…
+    .starting-table = Başlangıç tablosu
+    .table-direction = Tablo yönü
 center-cmd =
     .mark-select = CENTERMARK  Merkez işareti eklenecek daireyi veya yayı seçin ya da [Katman]:
     .mark-invalid = Seçilen nesne bir daire veya yay değil.
@@ -7944,3 +8166,233 @@ menu-labels =
     .write-block = Write Block...
     .xref = Xref
     .etransmit = eTransmit...
+
+array-grips = Öğe sayısı
+    .row-count = Satır sayısı
+    .row-and-column-count = Satır ve sütun sayısı
+    .item-count = Öğe sayısı
+    .angle-between-items = Öğeler arası açı
+    .prompt-columns = Sütun sayısını belirtin (Ctrl: toplam sütun aralığı):
+    .prompt-rows = Satır sayısını belirtin (Ctrl: toplam satır aralığı):
+    .prompt-rows-columns = Satır ve sütun sayısını belirtin:
+    .prompt-items = Öğe sayısını belirtin (Ctrl: doldurma açısı veya toplam aralık):
+    .prompt-column-spacing = Sütunlar arası mesafeyi belirtin:
+    .prompt-row-spacing = Satırlar arası mesafeyi belirtin:
+    .prompt-item-spacing = Öğeler arası mesafeyi belirtin:
+    .prompt-item-angle = Öğeler arası açıyı belirtin:
+    .prompt-radius = Yarıçapı belirtin:
+table-cells =
+    .borders-title = Hücre Kenarlıkları
+    .contents-title = Hücre İçeriği
+    .line = Çizgi
+    .lineweight = Çizgi kalınlığı
+    .linetype = Çizgi tipi
+    .color = Renk
+    .double = Çift çizgi
+    .spacing = Aralık
+    .apply-to = Uygulanacak kenarlar
+    .all = Tümü
+    .outside = Dış
+    .inside = İç
+    .none = Kenarlık yok
+    .top = Üst
+    .bottom = Alt
+    .left = Sol
+    .right = Sağ
+    .inside-horizontal = İç yatay
+    .inside-vertical = İç dikey
+    .contents = İçerik
+    .empty = Hücre boş.
+    .move-up = Yukarı taşı
+    .move-down = Aşağı taşı
+    .delete = Sil
+    .layout = Yerleşim
+    .flow = Akış
+    .stack-horizontal = Yatay yığın
+    .stack-vertical = Dikey yığın
+    .content-spacing = Aralık
+    .block-item = Blok: { $name }
+    .text-item = Metin: { $text }
+    .text-content = Tablo Hücresi Metni
+    .borders-help = Seçili hücrelerin kenarlıklarına çizgi kalınlığı, çizgi tipi ve renk verir; uygulanacak kenarları seçin.
+    .contents-help = Seçili hücrenin içeriğini sıralar, kaldırır ve yerleştirir.
+    .block-title = Hücre Bloğu
+    .format-title = Hücre Veri Biçimi
+    .block = Blok
+    .block-name = Ad
+    .browse = Gözat...
+    .block-path = Yol
+    .placement = Yerleşim
+    .alignment = Hücre hizalaması
+    .scale = Ölçek
+    .autofit = Hücreye sığdır
+    .rotation = Döndürme açısı
+    .format = Biçim
+    .current-precision = Geçerli hassasiyet
+    .precision = Hassasiyet
+    .symbol = Simge
+    .append-symbol = Simgeyi sona ekle
+    .negative-parens = Negatifler parantez içinde
+    .list-separator = Liste ayırıcı
+    .date-format = Tarih biçimi
+    .no-format-settings = Bu veri türünün biçim ayarı yok.
+    .data-type = Veri türü
+    .format-settings = Biçim
+    .currency = Para Birimi
+    .decimal-number = Ondalık Sayı
+    .percentage = Yüzde
+    .whole-number = Tam Sayı
+    .grads = Grad
+    .sample-text = örnek metin
+    .block-help = Seçili hücrelere blok koyar: hücredeki yeri, ölçeği (ya da hücreye sığdırma) ve döndürmesi.
+    .format-help = Seçili hücrelerin değerlerinin okunduğu veri türünü ve biçimi ayarlar.
+    .additional-format = Ek biçim
+    .conversion = Dönüşüm çarpanı
+    .prefix = Önek
+    .suffix = Sonek
+    .decimal-separator = Ondalık ayırıcı
+    .thousands-separator = Binlik ayırıcı
+    .space = Boşluk
+    .separator-none = (Yok)
+    .zero-leading = Baştaki sıfırlar
+    .zero-trailing = Sondaki sıfırlar
+    .zero-feet = 0 fit
+    .zero-inches = 0 inç
+    .warning-title = Veri Türü Uyuşmuyor
+    .warning-heading = Bu hücrelerdeki değerler seçilen veri türünde değil.
+    .warning-note = Dönüştürme her değeri yeni türde okur; okunamayan değer temizlenir. İptal hücreleri olduğu gibi bırakır.
+    .warning-ok = Dönüştür
+    .warning-cancel = İptal
+block-chain =
+    .label = Zincirleme eylemler
+    .cycle = Blok eylem zinciri bir döngü içeriyor.
+
+block-action-bars =
+    .requires-session = BACTIONBAR etkin bir blok düzenleyici oturumu gerektirir.
+    .enable-display = Eylem çubuklarını görüntülemek için BACTIONBARMODE değerini 1 yapın.
+    .parameters-changed = Parametre listesi değişti; BACTIONBAR komutunu yeniden başlatın.
+    .display-updated = Eylem çubuklarının görünümü güncellendi.
+    .prompt-mode = BACTIONBAR  [Show/Hide/Reset]:
+    .prompt-selected = BACTIONBAR  Parametre seçin, adını girin veya [All] <Seçili>:
+    .prompt-all = BACTIONBAR  Parametre seçin, adını girin veya [All] <All>:
+    .choose-mode = Show, Hide veya Reset seçin.
+    .unique-parameter = Benzersiz bir parametre adı girin, uç noktasını seçin veya All seçin.
+    .enter-parameter = Parametre adı girin veya All seçin.
+    .pick-endpoint = Parametre uç noktası seçin veya All seçin.
+
+block-construction =
+    .requires-session = BCONSTRUCTION yalnızca blok düzenleyicide kullanılabilir.
+    .choose-operation = Convert, Revert, Show veya Hide seçin.
+    .stale-session = Yardımcı geometrinin blok düzenleyici oturumu artık etkin değil.
+    .changed-count = __ocs_fmt_0__ geometri nesnesi değiştirildi.
+    .prompt-selection = BCONSTRUCTION  Geometri seçin veya [Convert/Revert/Show/Hide]:
+    .prompt-operation = BCONSTRUCTION  [Convert/Revert] <Convert> seçin veya seçili işlemi uygulamak için Enter tuşuna basın:
+    .revert = Geri al
+    .history = Yardımcı geometriyi düzenle
+    .unsupported-record = Bu yardımcı geometri kaydının sürümü veya değeri desteklenmiyor.
+    .open-definition = Yardımcı geometriyi düzenlemeden önce bir blok tanımı açın.
+    .missing-object = Seçili yardımcı geometri nesnesi artık kullanılamıyor.
+    .active-geometry = Etkin blok tanımındaki geometriyi seçin.
+    .locked-layer = Kilitli katmandaki yardımcı geometri değiştirilemez.
+    .revert-layer = Geri alınan geometri için var olan kilitsiz bir katman seçin.
+
+block-authoring-history =
+    .alignment-type = Hizalama türü
+    .action-override = Blok eylemi geçersiz kılmasını düzenle
+    .action-chain = Blok eylem zincirini düzenle
+    .action-base = Blok eylemi temel noktasını düzenle
+    .parameter-chain = BEDIT Parametre eylemlerini zincirle
+    .value-set = BEDIT Parametre değer kümesi
+    .parameter-metadata = Blok parametresi meta verilerini düzenle
+    .authoring-grip = Blok oluşturma tutamacı
+
+block-operation-history =
+    .reset-references = Blok referanslarını sıfırla
+    .associate-action = Blok eylemini ilişkilendir
+    .action-selection = Eylem seçim kümesi
+    .test-parameter = Test bloğu parametresi
+    .reference-parameter = Blok referansı parametresi
+    .align-reference = Blok referansını hizala
+    .insertion-grip-order = Ekleme tutamacı sırasını değiştir
+    .move-grip = Yerel blok tutamacını taşı
+    .configure-grips = Blok parametre tutamaçlarını yapılandır
+    .lookup-tables = Arama tabloları
+    .hyperlink = Blok köprüsü
+    .properties = Blok özellikleri
+    .properties-table = Blok özellikleri tablosu
+    .visibility-state = Görünürlük durumu
+    .visibility-states = Görünürlük durumları
+
+block-formatted-history =
+    .action = { $label } eylemi
+    .parameter = { $label } parametresi
+    .edit-block = { $label } bloğunu düzenle
+    .save-block = Bloğu { $label } olarak kaydet
+    .delete-block = { $label } bloğunu sil
+
+block-history-kinds =
+    .flip = Çevir
+    .polar-stretch = Kutupsal germe
+    .basepoint = Temel nokta
+    .lookup = Arama
+
+block-action-properties =
+    .base-point = Eylem temel noktası
+    .overrides = Eylem geçersiz kılmaları
+    .multiplier = Mesafe çarpanı
+    .angle-offset = Açı farkı (derece)
+    .chain = Eylem zinciri
+    .chain-to = Şuna zincirle
+
+block-parameter-properties =
+    .show-properties = Özelliklerde göster
+    .parameter-name = Parametre adı
+    .grip-count = Tutamak sayısı
+    .dependent-base = Bağımlı temel nokta
+    .offset-x = Temel ofset X
+    .offset-y = Temel ofset Y
+    .base-grip = Temel tutamak konumu
+    .end-grip = Bitiş tutamacı konumu
+    .x-grip = X tutamacı konumu
+    .y-grip = Y tutamacı konumu
+
+block-value-set =
+    .use-min = { $label } minimumunu kullan
+    .use-max = { $label } maksimumunu kullan
+    .use-increment = { $label } artışını kullan
+    .use-list = { $label } izin verilen değerler listesini kullan
+    .min = { $label } minimumu
+    .max = { $label } maksimumu
+    .increment = { $label } artışı
+    .values = { $label } izin verilen değerler
+    .title = Değer kümesi
+    .x-distance = X mesafesi
+    .y-distance = Y mesafesi
+
+parameters-manager =
+    .action-parameters = Eylem parametreleri
+    .filter = Ad*
+    .search = Parametre ara
+    .order = Sıra
+    .polar = Kutupsal
+    .visibility = Görünürlük
+    .variable = Değişken
+    .footer = Tümü: { $total } parametreden { $shown } tanesi gösteriliyor
+
+parameters-manager-feedback =
+    .no-number = Bu satırda düzenlenecek sayı yok.
+    .no-flag = Bu satırda değiştirilecek görünürlük işareti yok.
+    .finite-number = Sonlu bir sayısal parametre değeri belirtin.
+    .stale-session = Blok düzenleyici oturumu artık etkin değil.
+    .positive-length = Pozitif bir parametre uzunluğu belirtin.
+    .no-direction = Parametre yönü kullanılamıyor.
+    .history = Parametre yöneticisi düzenlemesi
+
+block-action-targets =
+    .prompt = BACTIONSET  Nesneleri seçin veya Parameter ardından bir nokta adı yazıp Enter tuşuna basın (Parameter "…"):
+    .create-prompt = BACTION  Nesneleri seçin veya Parameter ardından bir nokta adı yazıp Enter tuşuna basın (Parameter "…"):
+    .unique-point = Benzersiz bir nokta parametresi adı girin.
+    .empty = Bir eylem en az bir hedef gerektirir.
+    .invalid = Bu bloğa ait desteklenen hedefleri seçin.
+    .stale = Eylem veya blok düzenleyici oturumu değişti; BACTIONSET komutunu yeniden başlatın.
+    .create-stale = Eylem veya blok düzenleyici oturumu değişti; BACTION komutunu yeniden başlatın.

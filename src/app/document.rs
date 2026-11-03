@@ -178,6 +178,11 @@ pub(super) struct DocumentTab {
     /// OCS Pi Extension panel (native chat over the local pi-web API).
     pub(super) pi_panel: crate::ui::pi_panel::PiPanelState,
     pub(super) layers: LayerPanel,
+    /// Which Parameters Manager cell the panel has open, what has been typed
+    /// into it, and what the row list is filtered and searched to. It belongs to
+    /// this tab's session, so another definition's rows are never what a typed
+    /// number lands on.
+    pub(super) parameters_panel: crate::ui::window::parameters_manager::Panel,
     /// The LAYWALK pallet session, while a walk is open on this drawing.
     pub(super) layer_walk: Option<crate::ui::window::layer_walk::LayerWalkSession>,
     /// Rows cached for that session, so the pallet and the pure logic agree on
@@ -191,6 +196,8 @@ pub(super) struct DocumentTab {
     /// Dropdown state for `layer_walk_filters`.
     pub(super) layer_walk_combo: iced::widget::combo_box::State<String>,
     pub(super) active_cmd: Option<Box<dyn CadCommand>>,
+    /// MATCHPROP's last source; Enter at the source prompt picks it again.
+    pub(super) last_matchprop_src: codec::Handle,
     /// Follow-up command for a Parameter Set macro after parameter placement.
     pub(super) pending_parameter_set_follow_up: Option<&'static str>,
     pub(super) pending_xy_box_set: Option<(codec::Handle, crate::scene::block_actions::Kind, u8)>,
@@ -789,7 +796,9 @@ impl DocumentTab {
             properties: PropertiesPanel::empty(),
             pi_panel: crate::ui::pi_panel::PiPanelState::empty(),
             layers: LayerPanel::default(),
+            parameters_panel: Default::default(),
             active_cmd: None,
+            last_matchprop_src: codec::Handle::NULL,
             pending_parameter_set_follow_up: None,
             pending_xy_box_set: None,
             pending_action_pair: None,
@@ -892,6 +901,10 @@ impl DocumentTab {
     /// `DocumentOpened` once for this load (API v9). Call after the document
     /// and its derived caches have settled.
     pub(super) fn note_document_loaded(&mut self) {
+        // The document this tab's identity remembers a placed position in is
+        // gone, and its coordinates are not the new document's.
+        crate::modules::draw::draw::attdef::session().forget_place_of(self.id);
+        crate::modules::annotate::text::forget_place_of(self.id);
         self.document_opened_pending = true;
     }
 
@@ -913,6 +926,95 @@ impl DocumentTab {
     }
 }
 
+/// History keeps application messages distinct from command and authored labels.
+/// Only explicitly marked messages participate in locale lookup at display time.
+#[derive(Clone, Debug)]
+pub(super) enum HistoryLabel {
+    Literal(String),
+    Message(&'static str),
+    Formatted {
+        source: String,
+        attribute: &'static str,
+        value: Box<HistoryLabel>,
+    },
+}
+
+impl HistoryLabel {
+    pub(super) fn as_str(&self) -> &str {
+        match self {
+            Self::Literal(value) => value,
+            Self::Message(source) => source,
+            Self::Formatted { source, .. } => source,
+        }
+    }
+
+    pub(super) fn formatted(source: String, attribute: &'static str, value: Self) -> Self {
+        Self::Formatted { source, attribute, value: Box::new(value) }
+    }
+
+    fn display_with<'a>(
+        &'a self,
+        translate: &dyn Fn(&'static str) -> std::borrow::Cow<'static, str>,
+        format: &dyn Fn(&str, &str) -> Option<String>,
+    ) -> std::borrow::Cow<'a, str> {
+        match self {
+            Self::Literal(value) => std::borrow::Cow::Borrowed(value),
+            Self::Message(source) => translate(source),
+            Self::Formatted { source, attribute, value } => {
+                format(attribute, &value.display_with(translate, format))
+                    .map(std::borrow::Cow::Owned)
+                    .unwrap_or_else(|| std::borrow::Cow::Borrowed(source.as_str()))
+            }
+        }
+    }
+
+    fn estimated_bytes(&self) -> usize {
+        match self {
+            Self::Formatted { source, value, .. } => source.len()
+                .saturating_add(std::mem::size_of::<Self>())
+                .saturating_add(value.estimated_bytes()),
+            _ => self.as_str().len(),
+        }
+    }
+
+    pub(super) fn display(&self) -> std::borrow::Cow<'_, str> {
+        self.display_with(&|source| crate::i18n::translate(source), &|attribute, value| {
+            crate::i18n::format_attribute("block-formatted-history", attribute, &[("label", value)])
+        })
+    }
+
+}
+
+impl From<String> for HistoryLabel {
+    fn from(value: String) -> Self {
+        Self::Literal(value)
+    }
+}
+
+impl From<&str> for HistoryLabel {
+    fn from(value: &str) -> Self {
+        Self::Literal(value.to_owned())
+    }
+}
+
+impl From<&String> for HistoryLabel {
+    fn from(value: &String) -> Self {
+        Self::Literal(value.clone())
+    }
+}
+
+impl From<std::borrow::Cow<'_, str>> for HistoryLabel {
+    fn from(value: std::borrow::Cow<'_, str>) -> Self {
+        Self::Literal(value.into_owned())
+    }
+}
+
+impl std::fmt::Display for HistoryLabel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// One undo/redo entry. Every edit is represented as a first-touch entity delta
 /// plus an optional structure-only document image, so history never clones the
 /// full entity store.
@@ -929,8 +1031,15 @@ pub(super) enum HistorySnapshot {
 impl HistorySnapshot {
     pub(super) fn label(&self) -> &str {
         match self {
-            HistorySnapshot::Delta(d) => &d.label,
-            HistorySnapshot::ObjectVisibility(v) => &v.label,
+            HistorySnapshot::Delta(d) => d.label.as_str(),
+            HistorySnapshot::ObjectVisibility(v) => v.label.as_str(),
+        }
+    }
+
+    pub(super) fn display_label(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Delta(delta) => delta.label.display(),
+            Self::ObjectVisibility(snapshot) => snapshot.label.display(),
         }
     }
 
@@ -973,7 +1082,7 @@ impl HistorySnapshot {
                     (before.len() + after.len()).saturating_mul(32)
                 }))
                 .saturating_add(d.reference_designations.len().saturating_mul(16))
-                .saturating_add(d.label.len()),
+                .saturating_add(d.label.estimated_bytes()),
             HistorySnapshot::ObjectVisibility(v) => v
                 .before
                 .hidden
@@ -984,7 +1093,7 @@ impl HistorySnapshot {
                 .saturating_add(v.selected_before.len())
                 .saturating_add(v.selected_after.len())
                 .saturating_mul(16)
-                .saturating_add(v.label.len()),
+                .saturating_add(v.label.estimated_bytes()),
         }
     }
 }
@@ -997,7 +1106,7 @@ pub(super) struct ObjectVisibilitySnapshot {
     pub(super) after: ObjectIsolationState,
     pub(super) selected_before: Vec<Handle>,
     pub(super) selected_after: Vec<Handle>,
-    pub(super) label: String,
+    pub(super) label: HistoryLabel,
 }
 
 /// A transactional undo entry: for each touched handle, its before-image and
@@ -1044,7 +1153,7 @@ pub(super) struct DeltaSnapshot {
         crate::scene::named_parameters::ParameterTable,
         crate::scene::named_parameters::ParameterTable,
     )>,
-    pub(super) label: String,
+    pub(super) label: HistoryLabel,
 }
 
 #[derive(Clone)]
@@ -1137,7 +1246,7 @@ pub(super) struct HistoryState {
 
 pub(super) struct PendingHistorySnapshot {
     pub(super) visibility_states_before: rustc_hash::FxHashMap<Handle, usize>,
-    pub(super) label: String,
+    pub(super) label: HistoryLabel,
     pub(super) current_layout: String,
     pub(super) active_layer: String,
     pub(super) selected_before: Vec<Handle>,
@@ -1163,4 +1272,52 @@ pub(super) struct PendingHistorySnapshot {
     /// A plugin's undo group: message boundaries leave it open until the
     /// plugin ends it or the user runs a command.
     pub(super) held: bool,
+}
+
+
+#[cfg(test)]
+mod history_label_tests {
+    use super::HistoryLabel;
+    use std::borrow::Cow;
+
+    #[test]
+    fn history_literal_labels_bypass_translation_even_when_they_match_catalog_sources() {
+        for value in ["LINE", "PLUGIN: custom", "Revert", "Edit construction geometry"] {
+            let label = HistoryLabel::from(value);
+            assert_eq!(label.display_with(&|_| panic!("literal label was translated"), &|_, _| panic!("literal label was formatted")), value);
+            assert_eq!(label.as_str(), value);
+        }
+    }
+
+    #[test]
+    fn formatted_history_retains_source_and_only_translates_marked_arguments() {
+        for value in [HistoryLabel::from("Revert"), HistoryLabel::Message("Revert")] {
+            let message = matches!(value, HistoryLabel::Message(_));
+            let label = HistoryLabel::formatted("Edit block Revert".into(), "edit-block", value);
+            let rendered = label.display_with(&|source| {
+                assert_eq!(source, "Revert");
+                Cow::Borrowed("translated kind")
+            }, &|attribute, value| {
+                assert_eq!(attribute, "edit-block");
+                assert_eq!(value, if message { "translated kind" } else { "Revert" });
+                Some(format!("localized template: {value}"))
+            });
+            assert!(rendered.starts_with("localized template:"));
+            assert_eq!(label.as_str(), "Edit block Revert");
+            assert_eq!(label.display_with(&|source| Cow::Borrowed(source), &|_, _| None), label.as_str());
+        }
+    }
+
+    #[test]
+    fn history_message_labels_render_again_without_mutating_the_stored_source() {
+        let label = HistoryLabel::Message("Edit construction geometry");
+        let retained = label.clone();
+        for translated in ["Modifier la géométrie de construction", "تحرير الهندسة الإنشائية"] {
+            assert_eq!(retained.display_with(&|source| {
+                assert_eq!(source, "Edit construction geometry");
+                Cow::Owned(translated.to_owned())
+            }, &|_, _| panic!("plain message was formatted")), translated);
+            assert_eq!(retained.as_str(), "Edit construction geometry");
+        }
+    }
 }

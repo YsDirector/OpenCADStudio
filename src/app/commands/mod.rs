@@ -47,6 +47,7 @@ mod point_cloud;
 mod refedit;
 pub(crate) mod sheet_set;
 mod spell;
+mod table_cells;
 mod styleprops;
 mod text_edit;
 mod table_style_var;
@@ -397,6 +398,7 @@ impl OpenCADStudio {
         // one (ZOOM Window) parks the running command and resumes it when the
         // zoom ends, as does a ZOOM the zoom prompt itself hands off to.
         let transparent = is_transparent(cmd)
+            || (cmd == "PARAMETERS" && self.tabs[i].active_block_edit_session().is_some())
             || (quoted && is_transparent_capable(cmd))
             || (self.tabs[i].transparent_resume && cmd.starts_with("ZOOM"));
         if transparent {
@@ -633,6 +635,9 @@ impl OpenCADStudio {
         if let Some(t) = self.dispatch_blocks(cmd, i) {
             return Some(t);
         }
+        if let Some(t) = self.dispatch_table_cells(cmd, i) {
+            return Some(t);
+        }
         if let Some(t) = self.dispatch_pdf_underlay(cmd, i) {
             return Some(t);
         }
@@ -756,6 +761,8 @@ pub fn is_transparent(cmd: &str) -> bool {
                 | "DSETTINGS"
                 | "BAUTHORPALETTE"
                 | "BAUTHORPALETTECLOSE"
+                | "BPARAMETERS"
+                | "BPARAMETERSCLOSE"
                 | "PARAMETERSCLOSE"
         )
 }
@@ -822,6 +829,10 @@ inventory::submit!(crate::command::CommandRegistration {
         // Drafting-aid / display toggles + customization entry points wired in the
         // dispatch families (no interactive command module of their own).
         "ALIASEDIT",
+        // Dispatched commands that the alias file names (#2452).
+        "CTABLESTYLE",
+        "SELHANDLES",
+        "SELH",
         // Implemented command-line block forms must also validate in ALIASEDIT.
         "-BLOCK",
         "-BMAKE",
@@ -1335,6 +1346,8 @@ inventory::submit!(crate::command::CommandRegistration {
         "TABLESTYLE",
         "BAUTHORPALETTE",
         "BAUTHORPALETTECLOSE",
+        "BPARAMETERS",
+        "BPARAMETERSCLOSE",
         "TOOLPALETTES",
         "TP",
         "TS",

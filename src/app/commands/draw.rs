@@ -1348,10 +1348,11 @@ impl OpenCADStudio {
                             .copied()
                             .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                             .collect();
-                        self.tabs[i].scene.bump_entities_with_parametric_policy(
+                        self.tabs[i].scene.bump_entities_after_constraint_added(
                             &changes,
                             &[],
                             self.constraint_solve_mode,
+                            &[],
                         );
                         self.tabs[i].dirty = true;
                         self.refresh_properties();
@@ -1363,6 +1364,7 @@ impl OpenCADStudio {
                             )
                             .as_str(),
                         );
+                        self.report_pending_network_moves(i);
                         if let Some(pd) = pending {
                             self.commit_undo_delta(i, pd);
                         }
@@ -1604,7 +1606,9 @@ impl OpenCADStudio {
                     .into_iter()
                     .map(|handle| (handle, crate::scene::ChangeKind::Modified))
                     .collect();
-                self.tabs[i].scene.bump_entities(&changes);
+                self.tabs[i]
+                    .scene
+                    .bump_entities_after_constraint_added(&changes, &[], false, &[]);
                 self.tabs[i].scene.refresh_hidden_dynamic_dimensions();
                 self.tabs[i].scene.refresh_dynamic_dimension_scales(true);
                 self.tabs[i].scene.deselect_all();
@@ -1617,6 +1621,7 @@ impl OpenCADStudio {
                     crate::tf!("{refused} associative dimension(s) could not be converted")
                         .as_ref(),
                 );
+                self.report_pending_network_moves(i);
                 if let Some(pd) = pending {
                     self.commit_undo_delta(i, pd);
                 }
@@ -1980,9 +1985,6 @@ impl OpenCADStudio {
                     self.command_line.push_error(
                         "Invalid selection for Perpendicular. Select a line segment, polyline segment, text, MText, major or minor axis of ellipse or elliptical arc.",
                     );
-                    let command = PerpendicularConstraintCommand::new();
-                    self.command_line.push_info(&command.prompt());
-                    self.tabs[i].active_cmd = Some(Box::new(command));
                 }
             }
 
@@ -2019,9 +2021,6 @@ impl OpenCADStudio {
                     self.command_line.push_error(
                         "Invalid selection for Tangent. Select a line, polyline segment, circle, arc or ellipse.",
                     );
-                    let command = TangentConstraintCommand::new();
-                    self.command_line.push_info(&command.prompt());
-                    self.tabs[i].active_cmd = Some(Box::new(command));
                 }
             }
 
@@ -2134,6 +2133,9 @@ impl OpenCADStudio {
                     );
                     let command = refs
                         .first()
+                        // Unlike the perpendicular and tangent refusals, this
+                        // one keeps a pick that did convert: the command asks
+                        // for the partner of a circle it already holds.
                         .copied()
                         .map(ConcentricConstraintCommand::with_first)
                         .unwrap_or_else(ConcentricConstraintCommand::new);
@@ -2939,7 +2941,12 @@ impl OpenCADStudio {
                     let styles = scene.document.text_styles.iter().cloned().collect();
                     (defaults, styles, annotation_multiplier)
                 };
-                let new_cmd = TextCommand::with_defaults(defaults, styles, annotation_multiplier);
+                let new_cmd = TextCommand::with_defaults(
+                    defaults,
+                    styles,
+                    annotation_multiplier,
+                    self.tabs[i].id,
+                );
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
