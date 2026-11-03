@@ -467,6 +467,50 @@ LC_ALL=C cargo test -p OpenCADStudio --lib \
 >
 > **未做**：没有安全部署 `.so` 到运行目录，也没有重启用户现有 GUI/MCP；真实 Python IPC、GUI C11/P6 像素和 CHAMFER 现场验证仍按问题清单保留。合并 diff 相对上游仍包含 origin 带入的空白诊断（`git diff --check 62074cf9..origin/main` 计 136 行），本次不做全树格式化。
 
+## 0.18 上游同步执行记录（2026-11-04，`origin/main` `9d0c454ae` / **311 提交**，含 v2026.44）
+
+> 合并提交 `c8068d07f`（父：fork `3ae2af7bb` + 上游 `9d0c454ae`）。
+> 安全网：tag `presync-2026-11-04-3ae2af7bb`、分支 `backup/pre-2026.44`。
+> 上次同步基座 `6ccfb142f`；上游 **367 文件 / +60950 −4007**，双方共同改动 71 文件。
+> 新增 tag：**`v2026.44`**（`0e77cae65`）；版本号 `2026.43.0 → 2026.44.0`。
+>
+> 依赖同批升级：codec `opencaddocument` `d657f94 → 598b1bb`，kernel/kernel-constraints
+> `3d6c6e8 → 76542bc`，graph 不变（`5e4dc20`）。
+
+### 冲突（8 文件，远少于上轮的 37）
+
+| 文件 | 处置 |
+|---|---|
+| `changelogs/unreleased.md` | 并集（fork 的 OCSM/HATCH 条目 + 上游新条目） |
+| `docs/automation/{API-SPEC,README}.md` | Insert 行取上游（新增 `attributes` 字段）；Solid 行保留 fork 更精确的措辞（3 点是三角形态、corner4 等于 corner3） |
+| `scripts/test_locales.py` | 取上游新首行（多查 history-message），保留 fork 的长判据说明 |
+| `src/app/dock/update.rs`（2 处） | `PanelId::Pi` 与上游新增的 `ParametersManager` 并集 |
+| `src/app/record_api.rs`（2 处） | 上游给 `apply_updates` 加了 `kind` 参数并新增 `type_at_path` / 颜色写入；fork 的 INSERT/ATTRIB 别名与 `/scale` 展开**并入 `apply_updates` 的预处理**（`rewrite_entity_updates`），不再有单独的 `entity_update_request` |
+| `src/scene/entity.rs` | 上游新测试模块与 fork 的 `hatch_fold_tests` 并集 |
+| `src/mcp.rs` | `TOOL_SCHEMA_DIGEST` 重算为 `c2d7d09a…` |
+
+### 合并后修正（非冲突但必须改）
+
+* `crates/ocs_plugin_api/src/process.rs`：`NullHost` 已从单元结构体变成带 `scratch_doc` 字段的结构体，
+  fork 新增的 2 处测试用法改为 `NullHost::default()`。
+* `src/ui/dock.rs`：`PanelId::ALL` 14 → **15**（上游新增 `ParametersManager`）。
+* `src/command.rs`：上游新增测试要求 `assets/ocad.pgp` 里**每个**别名目标都是已注册命令。
+  OCSM 的别名指向插件命令（只有插件加载时才注册），按前缀 `OCSM` 排除——插件侧 `command_prefixes` 才是它们的出处。
+* `src/app/record_api.rs` / `src/app/dock/update.rs` / `src/scene/entity.rs` / `src/app/record_api.rs`
+  的 `theirs+ours` 并集照例把上游块截断（缺 `}`、上游函数体被挤掉），靠 unclosed delimiter 逐个补回。
+
+### 验证（合并树）
+
+* `cargo check --lib --tests`：✅　`cargo check -p ocs_plugin_api --all-targets --features host`：✅
+* `tools/cargo_guarded.sh test --workspace --locked`：**5550 passed / 0 failed / 60 ignored**
+* 产物：宿主 `target/release/OpenCADStudio`（147401928 bytes，`--version` = `OpenCADStudio 2026.44+414.gc8068d07`，
+  release 构建 10m28s）；插件 `libocs_ocsm.so` 已部署，`plugin.toml` 指纹重写为
+  `api_version = 14` / `rustc 1.97.0` / `acadrust_source = …acadrust.git?rev=7e7940f6#7e7940f6…`
+  （codec 升到 598b1bb 后 acadrust 的 pin 也变了，`acadrust_source` 键名不变但值必须重取）；
+  handbook 48 篇逐字节核对、bom 6 块、frame 2 个 dwg 保持原样。
+* `OCS_SMOKE_PLUGIN=…/libocs_ocsm.so OCS_PLUGIN_RUNNER_EXE=…/OpenCADStudio
+  cargo test -p OpenCADStudio --lib installed_plugin_registers_its_ribbon` → **1 passed**。
+
 ## 0.17 上游同步执行记录（2026-11-01，`origin/main` `6ccfb142f` / **986 提交**，含 v2026.43）
 
 > 合并提交：见 `git log --grep "上游同步 2026-11-01"`（父：fork `ef14525b9` + 上游 `6ccfb142f`）。
